@@ -1,0 +1,1401 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>UploadManager простыми словами</title>
+<style>
+/* Макет: длинное чтение с оглавлением слева; визуальный язык — накладная и диспетчерская доска службы доставки.
+   Цвета статусов одинаковы во всём документе: серый — в очереди, синий — грузится, зелёный — готово,
+   красный — ошибка, янтарный — ждём повтора. */
+:root {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --sunken: #e9edf3;
+  --ink: #172030;
+  --muted: #586273;
+  --line: #d3d9e3;
+  --accent: #2550c4;
+  --accent-soft: #e3eafb;
+  --queued: #5f6d82;
+  --queued-bg: #eaedf2;
+  --uploading: #2550c4;
+  --uploading-bg: #e3eafb;
+  --completing: #0d7a5c;
+  --completing-bg: #ddf2ea;
+  --failed: #bf3913;
+  --failed-bg: #fbe5dc;
+  --waiting: #9a6206;
+  --waiting-bg: #faeed3;
+  --font-display: "Avenir Next", "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e131a;
+    --surface: #151b25;
+    --sunken: #1c2431;
+    --ink: #e4e9f1;
+    --muted: #9ba6b7;
+    --line: #2b3546;
+    --accent: #7ea4ff;
+    --accent-soft: #1c2945;
+    --queued: #a3adbd;
+    --queued-bg: #222b38;
+    --uploading: #7ea4ff;
+    --uploading-bg: #1c2945;
+    --completing: #47c99f;
+    --completing-bg: #143229;
+    --failed: #ff8b63;
+    --failed-bg: #3a1f17;
+    --waiting: #f0be50;
+    --waiting-bg: #372c12;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e131a;
+  --surface: #151b25;
+  --sunken: #1c2431;
+  --ink: #e4e9f1;
+  --muted: #9ba6b7;
+  --line: #2b3546;
+  --accent: #7ea4ff;
+  --accent-soft: #1c2945;
+  --queued: #a3adbd;
+  --queued-bg: #222b38;
+  --uploading: #7ea4ff;
+  --uploading-bg: #1c2945;
+  --completing: #47c99f;
+  --completing-bg: #143229;
+  --failed: #ff8b63;
+  --failed-bg: #3a1f17;
+  --waiting: #f0be50;
+  --waiting-bg: #372c12;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  padding-inline: 16px;
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.65 var(--font-body);
+  -webkit-text-size-adjust: 100%;
+}
+img, svg { max-width: 100%; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.page {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding-block: 40px 80px;
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 24px 56px;
+}
+
+/* ---------- Шапка ---------- */
+.hero { grid-column: 1 / -1; display: grid; gap: 18px; padding-bottom: 28px; border-bottom: 1px solid var(--line); }
+.eyebrow { font: 600 12px/1.4 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+h1 {
+  margin: 0;
+  font: 750 clamp(2.1rem, 3.6vw + 1rem, 3.5rem)/1.05 var(--font-display);
+  letter-spacing: -0.025em;
+  text-wrap: balance;
+  max-width: 18ch;
+}
+.lead { margin: 0; font-size: 1.15rem; line-height: 1.55; max-width: 62ch; color: var(--ink); }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; font: 13px/1.5 var(--font-mono); color: var(--muted); }
+.meta b { color: var(--ink); font-weight: 600; }
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; }
+.legend > span:first-child { color: var(--muted); margin-right: 4px; }
+
+/* ---------- Оглавление ---------- */
+.toc { align-self: start; position: sticky; top: calc(env(safe-area-inset-top, 0px) + 20px); max-height: calc(100vh - 40px); overflow: auto; font-size: 13.5px; }
+.toc summary { cursor: pointer; font: 600 12px/1.4 var(--font-mono); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding-block: 4px; }
+.toc ol { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 2px; }
+.toc a { display: grid; grid-template-columns: 2.2em minmax(0, 1fr); gap: 4px; padding: 4px 6px; border-radius: 6px; color: var(--ink); text-decoration: none; line-height: 1.35; }
+.toc a:hover { background: var(--sunken); }
+.toc a span { font: 12px/1.6 var(--font-mono); color: var(--muted); }
+
+/* ---------- Текст ---------- */
+main { min-width: 0; max-width: 780px; }
+section { padding-top: 40px; scroll-margin-top: 16px; }
+h2 {
+  margin: 0 0 14px;
+  font: 700 clamp(1.45rem, 1.2vw + 1.05rem, 1.85rem)/1.2 var(--font-display);
+  letter-spacing: -0.015em;
+  text-wrap: balance;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+h2 .num {
+  flex: none;
+  font: 600 13px/1 var(--font-mono);
+  letter-spacing: .06em;
+  color: var(--accent);
+  border: 1.5px solid currentColor;
+  border-radius: 4px;
+  padding: 4px 6px;
+  transform: translateY(-3px);
+}
+h3 { margin: 22px 0 8px; font: 650 1.08rem/1.3 var(--font-display); }
+p { margin: 0 0 12px; max-width: 68ch; }
+ul, ol { margin: 0 0 12px; padding-left: 1.3em; max-width: 66ch; }
+li { margin-bottom: 4px; }
+strong { font-weight: 650; }
+code { font: 0.88em/1.4 var(--font-mono); background: var(--sunken); padding: 1px 5px; border-radius: 4px; }
+pre {
+  margin: 14px 0 18px;
+  background: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font: 13.5px/1.6 var(--font-mono);
+  tab-size: 2;
+}
+pre code { background: none; padding: 0; font-size: inherit; }
+pre .c { color: var(--muted); }
+
+/* ---------- Плашки ---------- */
+.note { margin: 16px 0 18px; padding: 14px 16px; border-radius: 10px; background: var(--surface); border: 1px dashed var(--line); max-width: 68ch; }
+.note p:last-child, .note ul:last-child { margin-bottom: 0; }
+.note .tag { display: block; margin-bottom: 6px; font: 700 11px/1 var(--font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+.note.analogy { background: var(--accent-soft); border-color: transparent; }
+.note.warn { background: var(--waiting-bg); border-color: transparent; }
+.note.warn .tag { color: var(--waiting); }
+.stamp {
+  margin: 18px 0;
+  padding: 16px 18px;
+  border: 3px double var(--ink);
+  border-radius: 6px;
+  max-width: 60ch;
+  font: 650 1.12rem/1.45 var(--font-display);
+}
+.stamp .tag { display: block; margin-bottom: 6px; font: 700 11px/1 var(--font-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+
+/* ---------- Статусы ---------- */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 9px;
+  border-radius: 999px;
+  font: 600 12px/1.7 var(--font-mono);
+  white-space: nowrap;
+  color: var(--queued);
+  background: var(--queued-bg);
+}
+.chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.st-queued { color: var(--queued); background: var(--queued-bg); }
+.st-uploading { color: var(--uploading); background: var(--uploading-bg); }
+.st-completing { color: var(--completing); background: var(--completing-bg); }
+.st-failed { color: var(--failed); background: var(--failed-bg); }
+.st-waiting { color: var(--waiting); background: var(--waiting-bg); }
+
+/* ---------- Таблицы ---------- */
+.tbl { margin: 14px 0 20px; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
+th, td { text-align: left; vertical-align: top; padding: 9px 12px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: none; }
+th { font: 600 11.5px/1.4 var(--font-mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); background: var(--sunken); }
+td:first-child { white-space: nowrap; }
+td.wrap { white-space: normal; }
+
+/* ---------- Схемы ---------- */
+.fig { margin: 18px 0 24px; }
+.fig-scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+.fig figcaption { margin-top: 8px; font-size: 14px; line-height: 1.5; color: var(--muted); max-width: 70ch; }
+.dia { display: block; width: 100%; min-width: 560px; height: auto; color: var(--ink); font-family: var(--font-body); }
+.dia text { fill: currentColor; font-size: 13px; }
+.dia .t-sm { font-size: 11.5px; }
+.dia .t-b { font-weight: 650; }
+.dia .t-mono { font-family: var(--font-mono); font-size: 11.5px; }
+.dia .t-muted { fill: var(--muted); }
+.dia .t-red { fill: var(--failed); }
+.dia .t-green { fill: var(--completing); }
+.dia .t-blue { fill: var(--uploading); }
+.dia .t-amber { fill: var(--waiting); }
+.dia .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.dia .box-faded { fill: var(--sunken); stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.dia .box-accent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 2; }
+.dia .box-q { fill: var(--queued-bg); stroke: var(--queued); stroke-width: 2; }
+.dia .box-up { fill: var(--uploading-bg); stroke: var(--uploading); stroke-width: 2; }
+.dia .box-done { fill: var(--completing-bg); stroke: var(--completing); stroke-width: 2; }
+.dia .box-fail { fill: var(--failed-bg); stroke: var(--failed); stroke-width: 2; }
+.dia .ln { stroke: currentColor; stroke-width: 1.5; fill: none; }
+.dia .ln-muted { stroke: var(--muted); stroke-width: 1.2; fill: none; }
+.dia .ln-red { stroke: var(--failed); stroke-width: 2; fill: none; }
+.dia .ln-green { stroke: var(--completing); stroke-width: 2; fill: none; }
+.dia .ln-blue { stroke: var(--uploading); stroke-width: 3; fill: none; }
+.dia .ln-amber { stroke: var(--waiting); stroke-width: 2; fill: none; }
+.dia .dash { stroke-dasharray: 5 4; }
+.dia .track { fill: var(--sunken); }
+.dia .fill-blue { fill: var(--uploading); }
+.dia .fill-green { fill: var(--completing); }
+.dia .fill-accent { fill: var(--accent); }
+.dia .band-red { fill: var(--failed-bg); }
+.dia .seg-amber { fill: var(--waiting); }
+.dia .seg-red { fill: var(--failed); }
+.dia .file-up { fill: var(--uploading); }
+.dia .file-done { fill: var(--completing); }
+.dia .file-wait { fill: var(--queued-bg); stroke: var(--queued); stroke-width: 1.5; }
+.dia .mk { fill: currentColor; }
+.dia .mk-red { fill: var(--failed); }
+.dia .mk-green { fill: var(--completing); }
+.dia .mk-blue { fill: var(--uploading); }
+.dia .mk-amber { fill: var(--waiting); }
+.dia .step-dot { fill: var(--accent); }
+.dia .step-num { fill: var(--surface); font: 700 11px var(--font-mono); }
+
+/* ---------- Накладная пакета ---------- */
+.label-wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; margin: 18px 0 24px; }
+.label-card { background: var(--surface); border: 2px solid var(--ink); border-radius: 6px; max-width: 540px; font-family: var(--font-mono); font-size: 13.5px; overflow: hidden; }
+.label-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 16px; padding: 10px 14px; background: var(--ink); color: var(--bg); font-weight: 700; letter-spacing: .08em; text-transform: uppercase; font-size: 12.5px; }
+.label-barcode {
+  height: 36px;
+  margin: 14px 14px 4px;
+  background: repeating-linear-gradient(90deg, var(--ink) 0 2px, transparent 2px 4px, var(--ink) 4px 7px, transparent 7px 9px, var(--ink) 9px 10px, transparent 10px 14px, var(--ink) 14px 17px, transparent 17px 18px);
+}
+.label-code { margin: 0 14px 10px; font-size: 11.5px; letter-spacing: .3em; color: var(--muted); }
+.label-fields { margin: 0; padding: 4px 14px 12px; display: grid; gap: 6px; border-bottom: 1.5px dashed var(--line); }
+.label-fields div { display: grid; grid-template-columns: 10.5em minmax(0, 1fr); gap: 10px; }
+.label-fields dt { color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: .08em; padding-top: 2px; }
+.label-fields dd { margin: 0; }
+.label-card table { font-size: 13px; }
+.label-card th { background: transparent; }
+.label-card td, .label-card th { padding: 7px 14px; }
+.label-card td:last-child, .label-card th:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.label-foot { padding: 10px 14px; background: var(--sunken); font-size: 12px; color: var(--muted); }
+
+/* ---------- Поток из шагов ---------- */
+.flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0 18px; }
+.flow .step { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 6px 11px; font-size: 14px; line-height: 1.4; }
+.flow .step.good { border-color: var(--completing); color: var(--completing); background: var(--completing-bg); }
+.flow .step.bad { border-color: var(--failed); color: var(--failed); background: var(--failed-bg); }
+.flow .arr { color: var(--muted); font-family: var(--font-mono); }
+
+/* ---------- Пары «слово — объяснение» ---------- */
+.pairs { margin: 14px 0 20px; display: grid; grid-template-columns: minmax(0, 190px) minmax(0, 1fr); gap: 10px 20px; }
+.pairs dt { font-weight: 650; }
+.pairs dt code { font-size: 0.85em; }
+.pairs dd { margin: 0; }
+@media (max-width: 560px) { .pairs { grid-template-columns: minmax(0, 1fr); gap: 2px; } .pairs dd { margin-bottom: 10px; } }
+
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 14px 0 20px; }
+@media (max-width: 640px) { .two { grid-template-columns: minmax(0, 1fr); } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.card h3 { margin-top: 0; }
+.card p:last-child { margin-bottom: 0; }
+.card.temp { border-color: var(--waiting); }
+.card.perm { border-color: var(--failed); }
+.card.temp h3 { color: var(--waiting); }
+.card.perm h3 { color: var(--failed); }
+
+.steps { list-style: none; padding: 0; margin: 14px 0 20px; display: grid; gap: 10px; counter-reset: s; max-width: none; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 2.2em minmax(0, 1fr); gap: 10px; align-items: start; margin: 0; }
+.steps li::before { content: counter(s); display: grid; place-items: center; width: 1.9em; height: 1.9em; border-radius: 50%; background: var(--accent); color: var(--surface); font: 700 12.5px var(--font-mono); }
+.steps li > div { padding-top: 2px; }
+
+/* ---------- Песочница ---------- */
+.sim { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: grid; gap: 14px; margin: 16px 0 10px; }
+.sim-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { font: 600 14px/1.2 var(--font-body); padding: 9px 13px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.btn-small { padding: 5px 10px; font-size: 13px; }
+.net { margin-left: auto; }
+.sim-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; max-width: none; }
+.sim-empty { color: var(--muted); font-size: 14.5px; }
+.sim-batch { margin: 0; border: 1.5px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 8px; background: var(--bg); }
+.sim-batch[data-state="uploading"] { border-color: var(--uploading); }
+.sim-batch[data-state="completing"] { border-color: var(--completing); }
+.sim-batch[data-state="failed"] { border-color: var(--failed); }
+.sim-batch[data-state="waiting"] { border-color: var(--waiting); }
+.sim-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.sim-row strong { font-family: var(--font-mono); font-size: 14px; }
+.sim-actions { margin-left: auto; display: flex; gap: 6px; }
+.sim-bar { height: 8px; background: var(--sunken); border-radius: 99px; overflow: hidden; }
+.sim-bar span { display: block; height: 100%; background: var(--queued); transition: width .25s linear; }
+.sim-batch[data-state="uploading"] .sim-bar span { background: var(--uploading); }
+.sim-batch[data-state="completing"] .sim-bar span { background: var(--completing); }
+.sim-batch[data-state="failed"] .sim-bar span { background: var(--failed); }
+.sim-batch[data-state="waiting"] .sim-bar span { background: var(--waiting); }
+.sim-log { margin: 0; padding: 10px 12px; background: var(--sunken); border-radius: 8px; font-size: 14.5px; min-height: 3.2em; }
+.sim-log b { font: 700 11px/1 var(--font-mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 4px; }
+.sim-done { font-size: 13.5px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+footer { grid-column: 1 / -1; margin-top: 40px; padding-top: 18px; border-top: 1px solid var(--line); font-size: 13.5px; color: var(--muted); }
+
+@media (max-width: 960px) {
+  .page { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .toc { position: static; max-height: none; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .sim-bar span { transition: none; }
+}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header class="hero">
+  <div class="eyebrow">src/upload/UploadManager.ts · подробное объяснение</div>
+  <h1>UploadManager простыми словами</h1>
+  <p class="lead">Как наш сайт загружает файлы по 25&nbsp;ГБ так, чтобы обрыв связи не отправлял всё в начало. Без спешки и с картинками: что такое пакет, очередь и повторы, как это устроено в коде и почему решения именно такие.</p>
+  <div class="meta">
+    <span><b>Чтение:</b> около 30 минут</span>
+    <span><b>Код описан на:</b> 12.10.2026</span>
+  </div>
+  <div class="legend">
+    <span>Цвета на всех схемах:</span>
+    <span class="chip st-queued">в очереди</span>
+    <span class="chip st-uploading">грузится</span>
+    <span class="chip st-completing">готово</span>
+    <span class="chip st-waiting">ждём повтора</span>
+    <span class="chip st-failed">ошибка</span>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Содержание">
+  <details open>
+    <summary>Содержание</summary>
+    <ol>
+      <li><a href="#task"><span>01</span>Какую задачу решаем</a></li>
+      <li><a href="#basics"><span>02</span>Браузер, сервер, запрос</a></li>
+      <li><a href="#why"><span>03</span>Почему нельзя одним запросом</a></li>
+      <li><a href="#tus"><span>04</span>Tus — загрузка с закладкой</a></li>
+      <li><a href="#uppy"><span>05</span>Uppy — тележка для файлов</a></li>
+      <li><a href="#batch"><span>06</span>Пакет (batch)</a></li>
+      <li><a href="#draft"><span>07</span>Черновик</a></li>
+      <li><a href="#manager"><span>08</span>Зачем UploadManager</a></li>
+      <li><a href="#queue"><span>09</span>Очередь</a></li>
+      <li><a href="#states"><span>10</span>Статусы пакета</a></li>
+      <li><a href="#errors"><span>11</span>Ошибки и повторы</a></li>
+      <li><a href="#token"><span>12</span>Токен — пропуск</a></li>
+      <li><a href="#trap"><span>13</span>Ловушка «начать сначала»</a></li>
+      <li><a href="#react"><span>14</span>Связь с React</a></li>
+      <li><a href="#path"><span>15</span>Путь пакета по шагам</a></li>
+      <li><a href="#sandbox"><span>16</span>Попробуйте сами</a></li>
+      <li><a href="#code"><span>17</span>Экскурсия по коду</a></li>
+      <li><a href="#files"><span>18</span>Остальные файлы</a></li>
+      <li><a href="#usage"><span>19</span>Как пользоваться</a></li>
+      <li><a href="#decisions"><span>20</span>Почему так решили</a></li>
+      <li><a href="#whatif"><span>21</span>Что будет, если…</a></li>
+      <li><a href="#glossary"><span>22</span>Словарик</a></li>
+    </ol>
+  </details>
+</nav>
+
+<main>
+
+<section id="task">
+  <h2><span class="num">01</span>Какую задачу решаем</h2>
+  <p>Пользователи загружают через сайт большие данные: фотографии, видео, карты в формате MBTiles и архивы. Один файл весит до 25&nbsp;ГБ, а за один раз можно загрузить до 100&nbsp;ГБ. Такая загрузка идёт часами.</p>
+  <p>За несколько часов обязательно что-нибудь случится: пропадёт Wi-Fi, ноутбук уснёт, сервер перезагрузят. Поэтому главное требование звучит так:</p>
+  <div class="stamp"><span class="tag">Главное требование</span>После обрыва загрузка продолжается с того места, где остановилась, а не начинается заново.</div>
+  <p>Представьте: вы три часа загружали 20&nbsp;ГБ, на 19-м гигабайте моргнул интернет — и всё сначала. Именно этого мы не допускаем.</p>
+</section>
+
+<section id="basics">
+  <h2><span class="num">02</span>Немного основ: браузер, сервер, запрос</h2>
+  <dl class="pairs">
+    <dt>Браузер</dt><dd>Программа у пользователя: Chrome, Firefox, Edge. В нём работает наш сайт — код на TypeScript и React. Это <strong>фронтенд</strong>, наша часть.</dd>
+    <dt>Сервер</dt><dd>Компьютер в дата-центре. Принимает файлы и сохраняет на диск. Это <strong>бэкенд</strong>, его делает бэкенд-разработчик.</dd>
+    <dt>Запрос</dt><dd>Сообщение браузера серверу, как письмо: «Вот тебе кусок файла» или «Сколько ты уже получил?».</dd>
+    <dt>Ответ</dt><dd>Письмо обратно. В нём есть <strong>код ответа</strong> — число, по которому понятно, как дела.</dd>
+    <dt>nginx</dt><dd>«Вахтёр» перед сервером. Принимает все запросы из интернета и передаёт серверу. Если сам сервер не работает, nginx отвечает <code>502</code>.</dd>
+  </dl>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Код</th><th>Что значит</th></tr></thead>
+      <tbody>
+        <tr><td><span class="chip st-completing">200–299</span></td><td class="wrap">Всё в порядке</td></tr>
+        <tr><td><span class="chip st-waiting">401</span></td><td class="wrap">«Не узнаю тебя, покажи свежий пропуск» — токен устарел</td></tr>
+        <tr><td><span class="chip st-failed">403</span></td><td class="wrap">«Тебе сюда нельзя»</td></tr>
+        <tr><td><span class="chip st-queued">404</span></td><td class="wrap">«Такого у меня нет»</td></tr>
+        <tr><td><span class="chip st-failed">500–599</span></td><td class="wrap">«У меня, у сервера, что-то сломалось»</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="why">
+  <h2><span class="num">03</span>Почему большой файл нельзя просто «отправить»</h2>
+  <p>Обычно файл отправляют одним запросом: «вот весь файл целиком». Для фотографии на 3&nbsp;МБ это нормально. Для 25&nbsp;ГБ — плохо: если связь оборвалась посередине, сервер выбрасывает всё полученное, ведь запрос не завершился. Браузеру приходится начинать с нуля.</p>
+  <div class="note analogy"><span class="tag">Аналогия</span><p>Вы диктуете по телефону книгу на 500 страниц. На 300-й странице связь прервалась. Если собеседник не записал, где вы остановились, придётся начинать с первой страницы.</p></div>
+
+  <figure class="fig">
+    <div class="fig-scroll">
+      <svg class="dia" viewBox="0 0 720 225" role="img" aria-label="Обычная загрузка после обрыва на 12 ГБ начинается с нуля, а загрузка по Tus продолжается с закладки на 12 ГБ и докачивает оставшиеся 8 ГБ">
+        <text x="20" y="22" class="t-b">Обычная загрузка — весь файл одним запросом</text>
+        <text x="110" y="52" text-anchor="end" class="t-sm t-muted">попытка 1</text>
+        <rect x="120" y="40" width="560" height="16" rx="3" class="track"/>
+        <rect x="120" y="40" width="336" height="16" rx="3" class="fill-blue"/>
+        <path d="M450 33 L462 63 M462 33 L450 63" class="ln-red"/>
+        <text x="470" y="52" class="t-sm t-red">обрыв на 12 ГБ</text>
+        <text x="110" y="84" text-anchor="end" class="t-sm t-muted">попытка 2</text>
+        <rect x="120" y="72" width="560" height="16" rx="3" class="track"/>
+        <rect x="120" y="72" width="56" height="16" rx="3" class="fill-blue"/>
+        <text x="186" y="84" class="t-sm t-red">снова с нуля: 12 ГБ впустую</text>
+
+        <text x="20" y="118" class="t-b">Tus — загрузка с закладкой</text>
+        <text x="110" y="160" text-anchor="end" class="t-sm t-muted">одна загрузка</text>
+        <rect x="120" y="148" width="560" height="16" rx="3" class="track"/>
+        <rect x="120" y="148" width="336" height="16" rx="3" class="fill-blue"/>
+        <rect x="456" y="148" width="224" height="16" rx="3" class="fill-green"/>
+        <line x1="456" y1="130" x2="456" y2="166" class="ln"/>
+        <path d="M456 130 L474 135 L456 140 Z" class="fill-accent"/>
+        <text x="480" y="139" class="t-sm">закладка: 12 ГБ</text>
+        <text x="288" y="182" text-anchor="middle" class="t-sm t-blue">12 ГБ до обрыва</text>
+        <text x="568" y="182" text-anchor="middle" class="t-sm t-green">докачка 8 ГБ</text>
+
+        <line x1="120" y1="194" x2="680" y2="194" class="ln-muted"/>
+        <line x1="120" y1="194" x2="120" y2="199" class="ln-muted"/>
+        <line x1="260" y1="194" x2="260" y2="199" class="ln-muted"/>
+        <line x1="400" y1="194" x2="400" y2="199" class="ln-muted"/>
+        <line x1="540" y1="194" x2="540" y2="199" class="ln-muted"/>
+        <line x1="680" y1="194" x2="680" y2="199" class="ln-muted"/>
+        <text x="120" y="214" text-anchor="middle" class="t-sm t-muted">0</text>
+        <text x="260" y="214" text-anchor="middle" class="t-sm t-muted">5</text>
+        <text x="400" y="214" text-anchor="middle" class="t-sm t-muted">10</text>
+        <text x="540" y="214" text-anchor="middle" class="t-sm t-muted">15</text>
+        <text x="680" y="214" text-anchor="end" class="t-sm t-muted">20 ГБ</text>
+      </svg>
+    </div>
+    <figcaption>Файл на 20&nbsp;ГБ, обрыв на 12-м гигабайте. Обычная загрузка теряет всё, что успела передать. Tus помнит закладку и докачивает только остаток.</figcaption>
+  </figure>
+</section>
+
+<section id="tus">
+  <h2><span class="num">04</span>Tus — загрузка «с закладкой»</h2>
+  <p><strong>Tus</strong> — это договорённость (по-научному <em>протокол</em>) между браузером и сервером: как загружать файл так, чтобы после обрыва продолжить. Сервер всё время помнит, сколько байт файла уже получил, — как закладку в книге.</p>
+
+  <figure class="fig">
+    <div class="fig-scroll">
+      <svg class="dia" viewBox="0 0 720 372" role="img" aria-label="Переписка браузера и сервера по Tus: создание загрузки, передача данных, обрыв, вопрос сколько получено, докачка остатка">
+        <defs>
+          <marker id="b-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk"/></marker>
+          <marker id="b-ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-green"/></marker>
+        </defs>
+        <rect x="70" y="8" width="140" height="34" rx="6" class="box"/>
+        <text x="140" y="30" text-anchor="middle" class="t-b">Браузер</text>
+        <rect x="510" y="8" width="140" height="34" rx="6" class="box"/>
+        <text x="580" y="30" text-anchor="middle" class="t-b">Сервер</text>
+        <line x1="140" y1="42" x2="140" y2="362" class="ln-muted dash"/>
+        <line x1="580" y1="42" x2="580" y2="362" class="ln-muted dash"/>
+
+        <circle cx="34" cy="80" r="11" class="step-dot"/><text x="34" y="84" text-anchor="middle" class="step-num">1</text>
+        <line x1="140" y1="80" x2="576" y2="80" class="ln" marker-end="url(#b-ah)"/>
+        <text x="360" y="72" text-anchor="middle"><tspan class="t-mono">POST</tspan>  хочу загрузить файл на 20 ГБ</text>
+        <line x1="580" y1="114" x2="144" y2="114" class="ln" marker-end="url(#b-ah)"/>
+        <text x="360" y="106" text-anchor="middle">вот адрес загрузки — как номер заказа</text>
+
+        <circle cx="34" cy="150" r="11" class="step-dot"/><text x="34" y="154" text-anchor="middle" class="step-num">2</text>
+        <line x1="140" y1="150" x2="576" y2="150" class="ln" marker-end="url(#b-ah)"/>
+        <text x="360" y="142" text-anchor="middle"><tspan class="t-mono">PATCH</tspan>  отправляю данные файла…</text>
+        <text x="590" y="168" class="t-sm t-muted">закладка растёт</text>
+
+        <circle cx="34" cy="196" r="11" class="step-dot"/><text x="34" y="200" text-anchor="middle" class="step-num">3</text>
+        <polyline points="120,196 132,188 144,204 156,188 168,204 180,188 192,204 204,188 216,204 228,188 240,204 252,188 264,204 276,188 288,204 300,188 312,204 324,188 336,204 348,188 360,204 372,188 384,204 396,188 408,204 420,188 432,204 444,188 456,204 468,188 480,204 492,188 504,204 516,188 528,204 540,188 552,204 564,188 576,204 588,188 600,196" class="ln-red"/>
+        <text x="360" y="180" text-anchor="middle" class="t-b t-red">обрыв связи на 12 ГБ</text>
+
+        <circle cx="34" cy="240" r="11" class="step-dot"/><text x="34" y="244" text-anchor="middle" class="step-num">4</text>
+        <line x1="140" y1="240" x2="576" y2="240" class="ln" marker-end="url(#b-ah)"/>
+        <text x="360" y="232" text-anchor="middle"><tspan class="t-mono">HEAD</tspan>  сколько у тебя уже есть?</text>
+        <line x1="580" y1="274" x2="144" y2="274" class="ln" marker-end="url(#b-ah)"/>
+        <text x="360" y="266" text-anchor="middle">есть 12 ГБ</text>
+
+        <circle cx="34" cy="310" r="11" class="step-dot"/><text x="34" y="314" text-anchor="middle" class="step-num">5</text>
+        <line x1="140" y1="310" x2="576" y2="310" class="ln-green" marker-end="url(#b-ahg)"/>
+        <text x="360" y="302" text-anchor="middle" class="t-green"><tspan class="t-mono">PATCH</tspan>  остальное, начиная с 12-го ГБ</text>
+        <line x1="580" y1="344" x2="144" y2="344" class="ln-green" marker-end="url(#b-ahg)"/>
+        <text x="360" y="336" text-anchor="middle" class="t-green">готово: все 20 ГБ на месте</text>
+      </svg>
+    </div>
+    <figcaption>Пять шагов загрузки по Tus. Закладку хранит сервер: после обрыва браузер не гадает, сколько успел отправить, а спрашивает (шаг 4).</figcaption>
+  </figure>
+
+  <ol>
+    <li>Браузер просит создать загрузку (<code>POST</code>). Сервер даёт ей адрес — по нему дальше ищут именно этот файл.</li>
+    <li>Браузер отправляет содержимое (<code>PATCH</code>). Сервер записывает данные на диск и двигает закладку.</li>
+    <li>Связь обрывается.</li>
+    <li>Браузер спрашивает, сколько уже получено (<code>HEAD</code>). Сервер отвечает: 12&nbsp;ГБ.</li>
+    <li>Браузер отправляет только остаток.</li>
+  </ol>
+</section>
+
+<section id="uppy">
+  <h2><span class="num">05</span>Uppy — тележка для файлов</h2>
+  <p><strong>Uppy</strong> — готовая библиотека для загрузки файлов в браузере. Мы не пишем всё с нуля, а пользуемся ей.</p>
+  <p>Один экземпляр Uppy (он создаётся командой <code>new Uppy()</code>) удобно представлять как <strong>тележку</strong>: в неё складывают файлы, она проверяет правила («не больше 25&nbsp;ГБ») и знает про каждый файл, загружается ли он, сколько процентов готово и была ли ошибка.</p>
+  <p>Сама тележка файлы не возит. Для этого к ней подключают <strong>плагин</strong> — дополнение. У нас это плагин <strong>Tus</strong>: водитель, который возит по правилам Tus, с закладкой.</p>
+<pre><code>const uppy = new Uppy({ ... }); <span class="c">// тележка с правилами</span>
+uppy.use(Tus, { ... });         <span class="c">// водитель, который возит по правилам Tus</span></code></pre>
+</section>
+
+<section id="batch">
+  <h2><span class="num">06</span>Пакет (batch) — посылка из нескольких коробок</h2>
+  <p>Пользователь загружает не один файл, а сразу несколько, и они связаны между собой. Многотомный архив — <code>survey.z01</code>, <code>survey.z02</code>, <code>survey.zip</code> — по частям бесполезен, как отдельные тома энциклопедии. Серия фотографий — это одна съёмка.</p>
+  <p>К тому же пользователь один раз заполняет <strong>метаданные</strong> — описание загрузки: тип данных и другие поля формы. Они относятся ко всей загрузке сразу.</p>
+  <p>Поэтому единица работы у нас — <strong>пакет</strong> (по-английски <em>batch</em>): посылка из нескольких коробок с одной накладной.</p>
+
+  <div class="label-wrap">
+    <div class="label-card" role="figure" aria-label="Пример накладной пакета: номер отправления, тип данных и три файла многотомного архива с номерами 0, 1 и 2">
+      <div class="label-head"><span>Пакет · batch</span><span>№ b-7q2c (пример)</span></div>
+      <div class="label-barcode" aria-hidden="true"></div>
+      <div class="label-code" aria-hidden="true">B 7 Q 2 C · 0 3 · 2 0 . 2 G B</div>
+      <dl class="label-fields">
+        <div><dt>batchId</dt><dd>b-7q2c — выдал сервер</dd></div>
+        <div><dt>Тип данных</dt><dd>Фото</dd></div>
+        <div><dt>Метаданные</dt><dd>заполнены в форме один раз</dd></div>
+      </dl>
+      <table>
+        <thead><tr><th>fileIndex</th><th>Коробка (файл)</th><th>Размер</th></tr></thead>
+        <tbody>
+          <tr><td>0</td><td>survey.z01</td><td>9,5 ГБ</td></tr>
+          <tr><td>1</td><td>survey.z02</td><td>9,5 ГБ</td></tr>
+          <tr><td>2</td><td>survey.zip</td><td>1,2 ГБ</td></tr>
+        </tbody>
+      </table>
+      <div class="label-foot">Каждый файл уходит на сервер с пометкой batchId и fileIndex</div>
+    </div>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>В посылке</th><th>У нас</th></tr></thead>
+      <tbody>
+        <tr><td>Коробки</td><td class="wrap">Файлы</td></tr>
+        <tr><td>Накладная</td><td class="wrap">Метаданные</td></tr>
+        <tr><td>Номер отправления</td><td class="wrap"><code>batchId</code> — его выдаёт сервер</td></tr>
+        <tr><td>Номер коробки</td><td class="wrap"><code>fileIndex</code> — 0, 1, 2…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><strong>Для каждого пакета — своя тележка Uppy.</strong> Так посылки не перепутаются, лимит «100&nbsp;ГБ за раз» считается для каждой отдельно, а отмена одной не трогает другие.</p>
+</section>
+
+<section id="draft">
+  <h2><span class="num">07</span>Черновик — посылку ещё собирают</h2>
+  <p>Пока пользователь заполняет форму и выбирает файлы, посылка ещё не отправлена. Это <strong>черновик</strong> — как корзина в интернет-магазине до оформления заказа. Черновик — это просто тележка Uppy с файлами, на сервер пока ничего не ушло.</p>
+  <div class="flow" aria-label="Черновик становится пакетом после нажатия Загрузить или выбрасывается при закрытии формы">
+    <span class="step">Открыли форму</span><span class="arr">→</span>
+    <span class="step">Черновик: тележка с файлами</span><span class="arr">→</span>
+    <span class="step good">«Загрузить» — стал пакетом</span>
+  </div>
+  <div class="flow">
+    <span class="step">Черновик</span><span class="arr">→</span>
+    <span class="step bad">закрыли форму без отправки — выбросили</span>
+  </div>
+  <p>Выбросить черновик не страшно: на сервере его нет. А после нажатия «Загрузить» та же самая тележка с теми же файлами становится пакетом (<code>startBatch</code>).</p>
+</section>
+
+<section id="manager">
+  <h2><span class="num">08</span>Зачем нужен UploadManager — диспетчер</h2>
+  <p>Сайт сделан на <strong>React</strong>. В React интерфейс собирается из <strong>компонентов</strong> — кирпичиков вроде «форма», «кнопка», «список». Компоненты появляются на экране и исчезают. Модальное окно открыли — компонент появился, закрыли — исчез.</p>
+  <p>Если хранить загрузку внутри компонента формы, то при закрытии окна она исчезает вместе с ним. Документация Uppy прямо об этом предупреждает. Поэтому загрузками управляет отдельный объект — <strong>UploadManager</strong>, диспетчер службы доставки.</p>
+
+  <figure class="fig">
+    <div class="fig-scroll">
+      <svg class="dia" viewBox="0 0 720 245" role="img" aria-label="Если загрузка живёт в форме, закрытие окна её обрывает. Если загрузкой владеет UploadManager, окно закрывается, а загрузка продолжается">
+        <defs>
+          <marker id="d-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk"/></marker>
+          <marker id="d-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-red"/></marker>
+          <marker id="d-ahg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-green"/></marker>
+        </defs>
+        <text x="20" y="24" class="t-b t-red">Загрузка внутри формы</text>
+        <rect x="20" y="42" width="190" height="128" rx="10" class="box-faded"/>
+        <text x="34" y="64" class="t-sm t-muted">окно (закрыли)</text>
+        <rect x="40" y="82" width="150" height="60" rx="8" class="box-faded"/>
+        <text x="115" y="108" text-anchor="middle" class="t-sm">форма</text>
+        <text x="115" y="126" text-anchor="middle" class="t-sm">+ загрузка Uppy</text>
+        <rect x="250" y="82" width="90" height="60" rx="8" class="box"/>
+        <text x="295" y="116" text-anchor="middle" class="t-b">Сервер</text>
+        <line x1="192" y1="112" x2="246" y2="112" class="ln-red dash" marker-end="url(#d-ahr)"/>
+        <path d="M212 104 L226 120 M226 104 L212 120" class="ln-red"/>
+        <text x="20" y="228" class="t-sm t-red">Окно закрылось — загрузка исчезла вместе с ним</text>
+
+        <text x="380" y="24" class="t-b t-green">Загрузка в UploadManager</text>
+        <rect x="380" y="42" width="160" height="56" rx="10" class="box-faded"/>
+        <text x="460" y="66" text-anchor="middle" class="t-sm t-muted">окно (закрыли)</text>
+        <text x="460" y="84" text-anchor="middle" class="t-sm">форма отдала пакет</text>
+        <line x1="460" y1="98" x2="460" y2="128" class="ln" marker-end="url(#d-ah)"/>
+        <rect x="380" y="132" width="160" height="64" rx="10" class="box-accent"/>
+        <text x="460" y="159" text-anchor="middle" class="t-b">UploadManager</text>
+        <text x="460" y="178" text-anchor="middle" class="t-sm">тележки Uppy внутри</text>
+        <rect x="610" y="134" width="90" height="60" rx="8" class="box"/>
+        <text x="655" y="168" text-anchor="middle" class="t-b">Сервер</text>
+        <line x1="540" y1="164" x2="606" y2="164" class="ln-green" marker-end="url(#d-ahg)"/>
+        <text x="573" y="154" text-anchor="middle" class="t-sm t-green">грузится</text>
+        <text x="380" y="228" class="t-sm t-green">Окно закрылось — загрузка продолжается</text>
+      </svg>
+    </div>
+    <figcaption>Одно и то же действие — закрыть модальное окно — с разным результатом. Слева загрузка принадлежит форме, справа диспетчеру, который живёт, пока открыта вкладка.</figcaption>
+  </figure>
+
+<pre><code><span class="c">// Один раз на всё приложение, НЕ внутри компонента:</span>
+export const uploadManager = new UploadManager({ tusEndpoint: '/api/uploads/', api });</code></pre>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Метод</th><th>Что делает</th></tr></thead>
+      <tbody>
+        <tr><td><code>createDraft()</code></td><td class="wrap">Выдать форме пустую тележку</td></tr>
+        <tr><td><code>discardDraft(uppy)</code></td><td class="wrap">Выбросить черновик, если форму закрыли без отправки</td></tr>
+        <tr><td><code>startBatch(uppy, данные)</code></td><td class="wrap">Оформить посылку и поставить её в очередь</td></tr>
+        <tr><td><code>retryBatchNow(id)</code></td><td class="wrap">Кнопка «Повторить»</td></tr>
+        <tr><td><code>cancelBatch(id)</code></td><td class="wrap">Кнопка «Отменить»</td></tr>
+        <tr><td><code>subscribe</code>, <code>getSnapshot</code></td><td class="wrap">Сообщать интерфейсу об изменениях</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="queue">
+  <h2><span class="num">09</span>Очередь — одна погрузочная рампа</h2>
+  <p>Пользователь может отправить несколько посылок подряд, не дожидаясь первой. По просьбе аналитика они встают в <strong>очередь</strong>.</p>
+
+  <figure class="fig">
+    <div class="fig-scroll">
+      <svg class="dia" viewBox="0 0 720 225" role="img" aria-label="Пакеты 2 и 3 ждут в очереди. Пакет 1 активен: четыре его файла загружаются на сервер одновременно, два уже готовы, два ждут внутри пакета">
+        <defs>
+          <marker id="e-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk"/></marker>
+          <marker id="e-ahb" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-blue"/></marker>
+        </defs>
+        <text x="100" y="28" text-anchor="middle" class="t-b">Очередь</text>
+        <rect x="20" y="58" width="160" height="48" rx="8" class="box-q"/>
+        <text x="100" y="79" text-anchor="middle" class="t-b">Пакет №2</text>
+        <text x="100" y="97" text-anchor="middle" class="t-sm">ждёт очереди</text>
+        <rect x="20" y="124" width="160" height="48" rx="8" class="box-q"/>
+        <text x="100" y="145" text-anchor="middle" class="t-b">Пакет №3</text>
+        <text x="100" y="163" text-anchor="middle" class="t-sm">ждёт очереди</text>
+        <line x1="182" y1="116" x2="226" y2="116" class="ln" marker-end="url(#e-ah)"/>
+
+        <text x="350" y="28" text-anchor="middle" class="t-b">Рампа: активен один пакет</text>
+        <rect x="230" y="44" width="240" height="146" rx="10" class="box-up"/>
+        <text x="250" y="68" class="t-b">Пакет №1</text>
+        <text x="452" y="68" text-anchor="end" class="t-sm t-blue">грузится</text>
+        <rect x="250" y="84" width="40" height="28" rx="4" class="file-up"/>
+        <rect x="302" y="84" width="40" height="28" rx="4" class="file-up"/>
+        <rect x="354" y="84" width="40" height="28" rx="4" class="file-up"/>
+        <rect x="406" y="84" width="40" height="28" rx="4" class="file-up"/>
+        <rect x="250" y="124" width="40" height="28" rx="4" class="file-done"/>
+        <rect x="302" y="124" width="40" height="28" rx="4" class="file-done"/>
+        <rect x="354" y="124" width="40" height="28" rx="4" class="file-wait"/>
+        <rect x="406" y="124" width="40" height="28" rx="4" class="file-wait"/>
+        <text x="350" y="178" text-anchor="middle" class="t-sm">8 файлов-коробок</text>
+
+        <line x1="472" y1="118" x2="552" y2="118" class="ln-blue" marker-end="url(#e-ahb)"/>
+        <text x="512" y="106" text-anchor="middle" class="t-sm t-blue">4 файла</text>
+        <text x="512" y="138" text-anchor="middle" class="t-mono t-blue">limit: 4</text>
+        <rect x="560" y="74" width="140" height="90" rx="8" class="box"/>
+        <text x="630" y="124" text-anchor="middle" class="t-b">Сервер</text>
+
+        <text x="350" y="214" text-anchor="middle" class="t-sm"><tspan class="t-blue">■ синие — грузятся</tspan>   <tspan class="t-green">■ зелёные — готовы</tspan>   <tspan class="t-muted">□ серые — ждут в пакете</tspan></text>
+      </svg>
+    </div>
+    <figcaption>Одновременно активен только один пакет. Внутри него 4 файла загружаются параллельно, остальные пакеты ждут своей очереди.</figcaption>
+  </figure>
+
+  <div class="note analogy"><span class="tag">Аналогия</span><p>На складе одна погрузочная рампа. Грузится одна посылка, остальные ждут. Но саму посылку грузят 4 грузчика сразу — это настройка <code>limit: 4</code>.</p></div>
+  <p>Почему не все посылки сразу:</p>
+  <ul>
+    <li>интернет-канал у пользователя один и делится между всеми загрузками. Грузить всё сразу — значит закончить всё примерно одновременно, но поздно. По очереди первая посылка придёт раньше, и сервер раньше начнёт её обрабатывать;</li>
+    <li>чем меньше одновременных соединений, тем спокойнее серверу и браузеру.</li>
+  </ul>
+  <div class="stamp"><span class="tag">Правило очереди</span>Одновременно активен только один пакет.</div>
+  <p>Порядок очереди — порядок, в котором пакеты лежат в поле <code>batches</code>. Это <code>Map</code> — список «ключ → значение», который помнит порядок добавления. За правило отвечает метод <code>startNext()</code>: «если сейчас никто не грузится — возьми первого ожидающего и запусти».</p>
+</section>
+
+<section id="states">
+  <h2><span class="num">10</span>Статусы пакета</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Статус</th><th>По-человечески</th><th>Аналогия</th></tr></thead>
+      <tbody>
+        <tr><td><span class="chip st-queued">queued</span></td><td class="wrap">Ждёт своей очереди</td><td class="wrap">Посылка стоит у рампы</td></tr>
+        <tr><td><span class="chip st-uploading">uploading</span></td><td class="wrap">Файлы загружаются</td><td class="wrap">Грузчики носят коробки</td></tr>
+        <tr><td><span class="chip st-completing">completing</span></td><td class="wrap">Всё загружено, сообщаем серверу</td><td class="wrap">Звоним на склад: «Всё привезли»</td></tr>
+        <tr><td><span class="chip st-failed">failed</span></td><td class="wrap">Ошибка, нужен человек</td><td class="wrap">Склад не принимает, ждём решения отправителя</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <figure class="fig">
+    <div class="fig-scroll">
+      <svg class="dia" viewBox="0 0 720 258" role="img" aria-label="Схема статусов: из очереди в загрузку, затем в завершение и готово. При постоянной ошибке пакет переходит в failed, кнопка Повторить возвращает его в конец очереди. При потере связи загрузка и завершение повторяются сами">
+        <defs>
+          <marker id="f-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk"/></marker>
+          <marker id="f-ahr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-red"/></marker>
+          <marker id="f-aha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-amber"/></marker>
+        </defs>
+        <path d="M226 82 C 226 42, 300 42, 300 78" class="ln-amber" marker-end="url(#f-aha)"/>
+        <text x="263" y="34" text-anchor="middle" class="t-sm t-amber">нет связи → повтор</text>
+        <path d="M426 82 C 426 42, 500 42, 500 78" class="ln-amber" marker-end="url(#f-aha)"/>
+        <text x="463" y="34" text-anchor="middle" class="t-sm t-amber">нет связи → повтор</text>
+
+        <rect x="10" y="82" width="120" height="54" rx="10" class="box-q"/>
+        <text x="70" y="104" text-anchor="middle" class="t-mono">queued</text>
+        <text x="70" y="123" text-anchor="middle" class="t-sm">ждёт очереди</text>
+        <rect x="196" y="82" width="134" height="54" rx="10" class="box-up"/>
+        <text x="263" y="104" text-anchor="middle" class="t-mono">uploading</text>
+        <text x="263" y="123" text-anchor="middle" class="t-sm">файлы грузятся</text>
+        <rect x="396" y="82" width="134" height="54" rx="10" class="box-done"/>
+        <text x="463" y="104" text-anchor="middle" class="t-mono">completing</text>
+        <text x="463" y="123" text-anchor="middle" class="t-sm">сообщаем серверу</text>
+        <rect x="596" y="82" width="114" height="54" rx="10" class="box"/>
+        <text x="653" y="104" text-anchor="middle" class="t-b">готово</text>
+        <text x="653" y="123" text-anchor="middle" class="t-sm">убран из списка</text>
+        <rect x="330" y="200" width="134" height="54" rx="10" class="box-fail"/>
+        <text x="397" y="222" text-anchor="middle" class="t-mono">failed</text>
+        <text x="397" y="241" text-anchor="middle" class="t-sm">ждёт решения</text>
+
+        <line x1="130" y1="109" x2="192" y2="109" class="ln" marker-end="url(#f-ah)"/>
+        <text x="161" y="152" text-anchor="middle" class="t-sm t-muted">дошла</text>
+        <text x="161" y="166" text-anchor="middle" class="t-sm t-muted">очередь</text>
+        <line x1="330" y1="109" x2="392" y2="109" class="ln" marker-end="url(#f-ah)"/>
+        <text x="363" y="152" text-anchor="middle" class="t-sm t-muted">файлы</text>
+        <text x="363" y="166" text-anchor="middle" class="t-sm t-muted">загружены</text>
+        <line x1="530" y1="109" x2="592" y2="109" class="ln" marker-end="url(#f-ah)"/>
+        <text x="561" y="152" text-anchor="middle" class="t-sm t-muted">сервер</text>
+        <text x="561" y="166" text-anchor="middle" class="t-sm t-muted">подтвердил</text>
+
+        <line x1="290" y1="136" x2="358" y2="197" class="ln-red" marker-end="url(#f-ahr)"/>
+        <line x1="440" y1="136" x2="428" y2="197" class="ln-red" marker-end="url(#f-ahr)"/>
+        <text x="318" y="186" text-anchor="end" class="t-sm t-red">постоянная ошибка</text>
+        <path d="M330 227 L70 227 L70 140" class="ln" marker-end="url(#f-ah)"/>
+        <text x="200" y="248" text-anchor="middle" class="t-sm">«Повторить» → в конец очереди</text>
+      </svg>
+    </div>
+    <figcaption>Цвет узла — цвет статуса в интерфейсе. Янтарные петли — автоповтор при потере связи: пакет остаётся на месте и держит очередь. «Отменить» работает из любого статуса и удаляет пакет.</figcaption>
+  </figure>
+  <p>Кроме статуса у пакета есть флаг <span class="chip st-waiting">ждём повтора</span> (<code>waitingRetry</code>) и текст ошибки (<code>error</code>). Когда пакет загружен и сервер это подтвердил, диспетчер убирает его из списка. Дальше сервер сам распаковывает архивы и копирует данные куда нужно — браузер в этом уже не участвует.</p>
+  <p>В минимальной версии на этом всё: пакет пропадает из списка. Показывать, чем закончилась обработка на сервере («Обработка», «Готово»), будем позже.</p>
+</section>
+
+<section id="errors">
+  <h2><span class="num">11</span>Ошибки и повторы</h2>
+  <div class="two">
+    <div class="card temp">
+      <h3>Временные</h3>
+      <p>«Сейчас не вышло, но потом получится»: пропал интернет, сервер перезагружается, nginx ответил <code>502</code>. Повторять имеет смысл.</p>
+    </div>
+    <div class="card perm">
+      <h3>Постоянные</h3>
+      <p>«Сколько ни повторяй, не поможет»: например, <code>403</code> — нет доступа. Нужен человек.</p>
+    </div>
+  </div>
+  <p>Какая ошибка какая, решает функция <code>isRetryable</code> по коду ответа. Временными считаются: сервер вообще не ответил, <code>401</code> (пропуск обновится), <code>408</code>, <code>409</code>, <code>423</code>, <code>429</code> и все <code>5xx</code>.</p>
+
+  <h3>Повторы — два уровня</h3>
+  <div class="note analogy"><span class="tag">Аналогия</span><p>Вы звоните в офис, а там занято. Сначала вы сами перезваниваете несколько раз подряд. Не дозвонились — ставите будильник «через 10 секунд» и снова делаете серию звонков. И так, пока не ответят.</p></div>
+  <ol>
+    <li><strong>Сначала tus перезванивает сам</strong>, несколько раз подряд: через 0,1&nbsp;с, 1&nbsp;с, 3&nbsp;с и 5&nbsp;с. Это встроенная функция плагина, всего около 9 секунд.</li>
+    <li><strong>Если tus сдался, за дело берётся диспетчер.</strong> Он ждёт 10 секунд и запускает новую попытку, которая снова начинается с быстрых повторов tus. Получается цикл примерно по 20 секунд — без ограничения числа попыток. Выключили сервер на час — через час загрузка продолжится сама.</li>
+  </ol>
+
+  <figure class="fig">
+    <div class="fig-scroll">
+      <svg class="dia" viewBox="0 0 720 196" role="img" aria-label="Сервер недоступен 33 секунды. Tus делает четыре быстрых повтора за 9 секунд, диспетчер ждёт 10 секунд, снова серия tus, снова пауза. На 38-й секунде попытка удаётся и загрузка продолжается с закладки">
+        <defs>
+          <marker id="g-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-amber"/></marker>
+        </defs>
+        <rect x="150" y="44" width="396" height="106" class="band-red"/>
+        <text x="158" y="60" class="t-sm t-red">сервер недоступен</text>
+        <line x1="546" y1="40" x2="546" y2="118" class="ln-green dash"/>
+        <text x="552" y="56" class="t-sm t-green">сервер вернулся</text>
+
+        <text x="140" y="86" text-anchor="end" class="t-sm t-b">tus сам</text>
+        <text x="140" y="134" text-anchor="end" class="t-sm t-b">диспетчер</text>
+
+        <rect x="151" y="78" width="108" height="4" class="seg-red"/>
+        <rect x="150" y="72" width="2" height="16" class="seg-red"/>
+        <rect x="162" y="72" width="2" height="16" class="seg-red"/>
+        <rect x="198" y="72" width="2" height="16" class="seg-red"/>
+        <rect x="258" y="72" width="2" height="16" class="seg-red"/>
+        <text x="205" y="104" text-anchor="middle" class="t-sm t-red">4 быстрых повтора</text>
+
+        <rect x="380" y="78" width="108" height="4" class="seg-red"/>
+        <rect x="380" y="72" width="2" height="16" class="seg-red"/>
+        <rect x="391" y="72" width="2" height="16" class="seg-red"/>
+        <rect x="427" y="72" width="2" height="16" class="seg-red"/>
+        <rect x="487" y="72" width="2" height="16" class="seg-red"/>
+        <text x="434" y="104" text-anchor="middle" class="t-sm t-red">снова 4 повтора</text>
+
+        <rect x="259" y="126" width="120" height="6" rx="3" class="seg-amber"/>
+        <text x="319" y="146" text-anchor="middle" class="t-sm t-amber">пауза 10 с</text>
+        <rect x="488" y="126" width="120" height="6" rx="3" class="seg-amber"/>
+        <text x="548" y="146" text-anchor="middle" class="t-sm t-amber">пауза 10 с</text>
+        <line x1="379" y1="126" x2="379" y2="92" class="ln-amber" marker-end="url(#g-ah)"/>
+        <line x1="608" y1="126" x2="608" y2="92" class="ln-amber" marker-end="url(#g-ah)"/>
+
+        <circle cx="608" cy="80" r="6" class="fill-green"/>
+        <rect x="614" y="77" width="76" height="6" rx="3" class="fill-green"/>
+        <text x="652" y="104" text-anchor="middle" class="t-sm t-green">докачка</text>
+
+        <line x1="150" y1="165" x2="690" y2="165" class="ln-muted"/>
+        <line x1="150" y1="165" x2="150" y2="170" class="ln-muted"/>
+        <line x1="270" y1="165" x2="270" y2="170" class="ln-muted"/>
+        <line x1="390" y1="165" x2="390" y2="170" class="ln-muted"/>
+        <line x1="510" y1="165" x2="510" y2="170" class="ln-muted"/>
+        <line x1="630" y1="165" x2="630" y2="170" class="ln-muted"/>
+        <text x="150" y="186" text-anchor="middle" class="t-sm t-muted">0 с</text>
+        <text x="270" y="186" text-anchor="middle" class="t-sm t-muted">10 с</text>
+        <text x="390" y="186" text-anchor="middle" class="t-sm t-muted">20 с</text>
+        <text x="510" y="186" text-anchor="middle" class="t-sm t-muted">30 с</text>
+        <text x="630" y="186" text-anchor="middle" class="t-sm t-muted">40 с</text>
+      </svg>
+    </div>
+    <figcaption>Шкала времени в масштабе: сервер недоступен 33 секунды. Красные засечки — быстрые повторы tus, янтарные отрезки — пауза диспетчера, стрелки вверх — новая попытка. Первая попытка после возвращения сервера сразу продолжает с закладки.</figcaption>
+  </figure>
+
+  <h3>Как ведёт себя очередь при ошибке</h3>
+  <ul>
+    <li><span class="chip st-waiting">временная</span> Пакет <strong>держит очередь</strong> и ждёт. Если пропал интернет, следующий пакет тоже не загрузится, переключаться на него нет смысла.</li>
+    <li><span class="chip st-failed">постоянная</span> Пакет переходит в <code>failed</code> и <strong>отпускает очередь</strong>. Загрузки идут часами, пользователь может отойти, и одна сломанная посылка не должна держать остальные. Тонкость: в <code>failed</code> пакет переходит, только когда <strong>ни один его файл уже не загружается</strong>, иначе два пакета грузились бы одновременно.</li>
+    <li>Кнопка <strong>«Повторить»</strong> у пакета с ошибкой ставит его <strong>в конец очереди</strong>, а не запускает сразу. Правило «один активный пакет» не нарушается.</li>
+  </ul>
+</section>
+
+<section id="token">
+  <h2><span class="num">12</span>Токен — пропуск на склад</h2>
+  <p>Сервер не принимает файлы от кого попало. Каждый запрос несёт <strong>токен</strong> — электронный пропуск в заголовке: <code>Authorization: Bearer &lt;токен&gt;</code>.</p>
+  <p>Обычный пропуск пользователя живёт недолго, а загрузка 100&nbsp;ГБ может длиться дольше. Поэтому сервер выдаёт <strong>отдельный пропуск на конкретную посылку</strong> — upload-токен. Он действует только для файлов этого пакета, живёт долго и выдаётся запросом <code>issueUploadToken(batchId)</code>.</p>
+  <div class="flow" aria-label="Жизнь пропуска: запросили один раз, запомнили, при ответе 401 забыли и получили новый, после завершения выбросили">
+    <span class="step">Первый запрос: попросили пропуск</span><span class="arr">→</span>
+    <span class="step">запомнили</span><span class="arr">→</span>
+    <span class="step bad">сервер ответил 401: забыли</span><span class="arr">→</span>
+    <span class="step">следующий запрос получит новый</span><span class="arr">→</span>
+    <span class="step good">пакет готов или отменён: выбросили</span>
+  </div>
+  <p>Запоминаем, чтобы не просить пропуск перед каждым из тысяч запросов. Если два запроса попросят его одновременно, оба дождутся одного ответа сервера.</p>
+</section>
+
+<section id="trap">
+  <h2><span class="num">13</span>Главная ловушка: «начать сначала»</h2>
+  <p>Самое хитрое место в коде. После обрыва tus спрашивает сервер «Сколько у тебя есть?» (запрос <code>HEAD</code>). Мы проверили в коде библиотеки и тестом: <strong>если на этот вопрос сервер ответил ошибкой (любой, кроме кода <code>423</code>), tus решает, что старой загрузки больше нет, и начинает файл заново, с нуля.</strong></p>
+  <p>На ровном месте так бывает, когда сервер перезагружается и nginx отвечает <code>502</code>, или когда пропуск устарел (<code>401</code>). В обоих случаях закладка на сервере цела, а tus её выбросит.</p>
+  <div class="note analogy"><span class="tag">Аналогия</span><p>Вы перезвонили уточнить, на какой странице остановились, а секретарь сказал «Подождите минутку». А tus в этот момент кладёт трубку и начинает диктовать книгу с первой страницы.</p></div>
+
+  <figure class="fig">
+    <div class="fig-scroll">
+      <svg class="dia" viewBox="0 0 720 192" role="img" aria-label="Без защиты ответ 502 на вопрос HEAD приводит к новой загрузке с нуля. С нашей защитой tus повторяет вопрос позже, получает 12 ГБ и докачивает остаток">
+        <defs>
+          <marker id="h-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk"/></marker>
+        </defs>
+        <text x="20" y="28" class="t-b t-red">Без защиты</text>
+        <rect x="20" y="40" width="96" height="46" rx="8" class="box"/>
+        <text x="68" y="59" text-anchor="middle" class="t-mono">HEAD</text>
+        <text x="68" y="76" text-anchor="middle" class="t-sm">сколько есть?</text>
+        <rect x="136" y="40" width="96" height="46" rx="8" class="box"/>
+        <text x="184" y="59" text-anchor="middle" class="t-sm t-b">ответ 502</text>
+        <text x="184" y="76" text-anchor="middle" class="t-sm">сервер занят</text>
+        <rect x="252" y="40" width="96" height="46" rx="8" class="box"/>
+        <text x="300" y="59" text-anchor="middle" class="t-sm t-b">tus решает:</text>
+        <text x="300" y="76" text-anchor="middle" class="t-sm">загрузки нет</text>
+        <rect x="368" y="40" width="96" height="46" rx="8" class="box"/>
+        <text x="416" y="59" text-anchor="middle" class="t-mono">POST</text>
+        <text x="416" y="76" text-anchor="middle" class="t-sm">новая загрузка</text>
+        <rect x="484" y="40" width="212" height="46" rx="8" class="box-fail"/>
+        <text x="590" y="59" text-anchor="middle" class="t-sm t-b t-red">файл заново, с нуля</text>
+        <text x="590" y="76" text-anchor="middle" class="t-sm t-red">12 ГБ впустую</text>
+        <line x1="117" y1="63" x2="134" y2="63" class="ln" marker-end="url(#h-ah)"/>
+        <line x1="233" y1="63" x2="250" y2="63" class="ln" marker-end="url(#h-ah)"/>
+        <line x1="349" y1="63" x2="366" y2="63" class="ln" marker-end="url(#h-ah)"/>
+        <line x1="465" y1="63" x2="482" y2="63" class="ln" marker-end="url(#h-ah)"/>
+
+        <text x="20" y="122" class="t-b t-green">С защитой (наш код)</text>
+        <rect x="20" y="134" width="96" height="46" rx="8" class="box"/>
+        <text x="68" y="153" text-anchor="middle" class="t-mono">HEAD</text>
+        <text x="68" y="170" text-anchor="middle" class="t-sm">сколько есть?</text>
+        <rect x="136" y="134" width="96" height="46" rx="8" class="box"/>
+        <text x="184" y="153" text-anchor="middle" class="t-sm t-b">ответ 502</text>
+        <text x="184" y="170" text-anchor="middle" class="t-sm">сервер занят</text>
+        <rect x="252" y="134" width="96" height="46" rx="8" class="box-accent"/>
+        <text x="300" y="153" text-anchor="middle" class="t-sm t-b">наша защита</text>
+        <text x="300" y="170" text-anchor="middle" class="t-mono">throw</text>
+        <rect x="368" y="134" width="96" height="46" rx="8" class="box"/>
+        <text x="416" y="153" text-anchor="middle" class="t-sm t-b">tus повторит</text>
+        <text x="416" y="170" text-anchor="middle" class="t-sm">HEAD позже</text>
+        <rect x="484" y="134" width="96" height="46" rx="8" class="box"/>
+        <text x="532" y="153" text-anchor="middle" class="t-sm t-b">ответ 200</text>
+        <text x="532" y="170" text-anchor="middle" class="t-sm">есть 12 ГБ</text>
+        <rect x="600" y="134" width="96" height="46" rx="8" class="box-done"/>
+        <text x="648" y="153" text-anchor="middle" class="t-sm t-b t-green">докачка</text>
+        <text x="648" y="170" text-anchor="middle" class="t-sm t-green">с 12-го ГБ</text>
+        <line x1="117" y1="157" x2="134" y2="157" class="ln" marker-end="url(#h-ah)"/>
+        <line x1="233" y1="157" x2="250" y2="157" class="ln" marker-end="url(#h-ah)"/>
+        <line x1="349" y1="157" x2="366" y2="157" class="ln" marker-end="url(#h-ah)"/>
+        <line x1="465" y1="157" x2="482" y2="157" class="ln" marker-end="url(#h-ah)"/>
+        <line x1="581" y1="157" x2="598" y2="157" class="ln" marker-end="url(#h-ah)"/>
+      </svg>
+    </div>
+    <figcaption>Один и тот же ответ сервера — <code>502</code> на вопрос «сколько есть?». Без защиты tus создаёт новую загрузку; с защитой просто переспрашивает позже и продолжает с закладки.</figcaption>
+  </figure>
+
+  <p>Защита — в методе <code>createDraft</code>, в настройке <code>onAfterResponse</code>:</p>
+<pre><code>if (req.getMethod() === 'HEAD' &amp;&amp; (status === 401 || status &gt;= 500)) {
+  throw new Error(`tus: HEAD вернул ${status}`);
+}</code></pre>
+  <p>Мы «выбрасываем ошибку» (<code>throw</code>). Tus воспринимает это как обычный сбой связи и переспрашивает чуть позже, не трогая закладку. Тест показал: без этих трёх строк короткий сбой сервера заставлял файл загружаться заново, а с ними — нет.</p>
+</section>
+
+<section id="react">
+  <h2><span class="num">14</span>Как UploadManager разговаривает с React</h2>
+  <p>React перерисовывает экран, когда меняются данные. Но UploadManager — обычный объект, и React о нём ничего не знает. Сообщать об изменениях помогает <strong>подписка</strong>, как на рассылку.</p>
+
+  <figure class="fig">
+    <div class="fig-scroll">
+      <svg class="dia" viewBox="0 0 720 150" role="img" aria-label="Тележка Uppy присылает события диспетчеру, диспетчер вызывает notify и сообщает компонентам, компоненты забирают снимок через getSnapshot">
+        <defs>
+          <marker id="i-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk"/></marker>
+        </defs>
+        <rect x="20" y="44" width="140" height="64" rx="10" class="box"/>
+        <text x="90" y="71" text-anchor="middle" class="t-b">Тележка Uppy</text>
+        <text x="90" y="90" text-anchor="middle" class="t-sm">присылает события</text>
+        <rect x="290" y="44" width="140" height="64" rx="10" class="box-accent"/>
+        <text x="360" y="71" text-anchor="middle" class="t-b">UploadManager</text>
+        <text x="360" y="90" text-anchor="middle" class="t-sm">делает снимок</text>
+        <rect x="560" y="44" width="140" height="64" rx="10" class="box"/>
+        <text x="630" y="71" text-anchor="middle" class="t-b">Компоненты</text>
+        <text x="630" y="90" text-anchor="middle" class="t-sm">BatchList и др.</text>
+
+        <line x1="160" y1="76" x2="286" y2="76" class="ln" marker-end="url(#i-ah)"/>
+        <text x="223" y="68" text-anchor="middle" class="t-sm">события</text>
+        <text x="223" y="94" text-anchor="middle" class="t-mono t-muted">progress, error</text>
+        <line x1="430" y1="64" x2="556" y2="64" class="ln" marker-end="url(#i-ah)"/>
+        <text x="493" y="56" text-anchor="middle" class="t-mono">notify()</text>
+        <line x1="560" y1="92" x2="434" y2="92" class="ln dash" marker-end="url(#i-ah)"/>
+        <text x="497" y="112" text-anchor="middle" class="t-mono">getSnapshot()</text>
+        <text x="360" y="138" text-anchor="middle" class="t-sm t-muted">прогресс приходит не чаще двух раз в секунду — экран не перерисовывается лишний раз</text>
+      </svg>
+    </div>
+    <figcaption>Uppy сообщает диспетчеру о событиях. Диспетчер делает «фотографию» состояния и говорит подписчикам «есть новости» (<code>notify</code>). Компоненты забирают свежую фотографию (<code>getSnapshot</code>) и перерисовываются.</figcaption>
+  </figure>
+
+  <p>В React для этого есть готовый механизм <code>useSyncExternalStore</code>. Мы завернули его в простой хук:</p>
+<pre><code>const batches = useUploadBatches(uploadManager); <span class="c">// список пакетов, всегда свежий</span></code></pre>
+  <p>Второй хук — <code>useUploadDraft(uploadManager)</code>. При открытии формы он берёт у диспетчера пустую тележку, а при закрытии выбрасывает её, если посылку так и не отправили.</p>
+</section>
+
+<section id="path">
+  <h2><span class="num">15</span>Весь путь пакета по шагам</h2>
+  <ol class="steps">
+    <li><div><strong>Пользователь открывает форму.</strong> <code>useUploadDraft</code> получает у диспетчера черновик — пустую тележку.</div></li>
+    <li><div><strong>Перетаскивает файлы.</strong> Тележка проверяет формат и размер. Неподходящие файлы не берёт, а пользователь видит причину.</div></li>
+    <li><div><strong>Нажимает «Загрузить».</strong> Форма вызывает <code>startBatch(draft, { dataType, metadata })</code>.</div></li>
+    <li><div><strong>Оформление.</strong> Диспетчер отправляет на сервер «накладную» — метаданные и список файлов (<code>createBatch</code>). Сервер отвечает номером посылки, <code>batchId</code>.</div></li>
+    <li><div><strong>Подписываем коробки.</strong> В каждый файл записываются <code>batchId</code> и <code>fileIndex</code>. Пакет встаёт в очередь <span class="chip st-queued">queued</span>. Форму уже можно закрыть.</div></li>
+    <li><div><strong>Старт.</strong> Если никто не грузится, <code>startNext()</code> запускает пакет <span class="chip st-uploading">uploading</span>.</div></li>
+    <li><div><strong>Загрузка.</strong> Перед каждым запросом подставляется пропуск. Файлы летят по 4 одновременно, прогресс идёт в интерфейс.</div></li>
+    <li><div><strong>Пропал интернет.</strong> Tus повторяет несколько раз, не выходит, — диспетчер включает автоповтор <span class="chip st-waiting">ждём повтора</span>. В интерфейсе: «Нет связи с сервером. Повторим автоматически».</div></li>
+    <li><div><strong>Интернет вернулся.</strong> На очередной попытке tus спрашивает «Сколько у тебя есть?» и докачивает остаток.</div></li>
+    <li><div><strong>Все файлы загружены.</strong> Диспетчер сообщает серверу «всё привезли» <span class="chip st-completing">completing</span>.</div></li>
+    <li><div><strong>Сервер подтвердил.</strong> Диспетчер убирает пакет, выбрасывает пропуск и запускает следующий из очереди.</div></li>
+  </ol>
+</section>
+
+<section id="sandbox">
+  <h2><span class="num">16</span>Попробуйте сами</h2>
+  <p>Это упрощённая модель очереди: та же логика, что в <code>UploadManager</code>, только время ускорено. Отправляйте пакеты, обрывайте связь, присылайте ошибку — и смотрите, что происходит.</p>
+  <div class="sim" id="sim">
+    <div class="sim-controls">
+      <button type="button" class="btn btn-primary" id="sim-add">Отправить пакет</button>
+      <button type="button" class="btn" id="sim-net">Оборвать связь</button>
+      <button type="button" class="btn" id="sim-fail">Сервер: «нет доступа»</button>
+      <span class="net chip st-completing" id="sim-net-state">связь есть</span>
+    </div>
+    <ul class="sim-list" id="sim-list"></ul>
+    <p class="sim-log" id="sim-log" aria-live="polite"><b>Что происходит</b><span id="sim-log-text">Пакет №1 загружается, №2 и №3 ждут очереди.</span></p>
+    <div class="sim-done" id="sim-done"></div>
+  </div>
+  <p style="font-size:14px;color:var(--muted)">Упрощения модели: пауза перед повтором — 3 секунды вместо примерно 20; ошибка «нет доступа» переводит пакет в <code>failed</code> сразу, а в настоящем коде — когда у пакета не останется загружающихся файлов.</p>
+</section>
+
+<section id="code">
+  <h2><span class="num">17</span>Экскурсия по коду UploadManager.ts</h2>
+  <p>Пройдём файл сверху вниз. Удобно открыть его рядом.</p>
+  <h3>Поля — что диспетчер помнит</h3>
+<pre><code>private readonly batches = new Map&lt;string, Batch&gt;();          <span class="c">// все пакеты в порядке очереди</span>
+private readonly submitted = new WeakSet&lt;Uppy&gt;();              <span class="c">// черновики, которые уже отправлены</span>
+private readonly tokens = new Map&lt;string, Promise&lt;string&gt;&gt;();  <span class="c">// пропуска по пакетам</span>
+private readonly listeners = new Set&lt;() =&gt; void&gt;();            <span class="c">// подписчики (компоненты React)</span>
+private snapshot: BatchView[] = [];                            <span class="c">// последний снимок для интерфейса</span></code></pre>
+  <dl class="pairs">
+    <dt><code>Map</code></dt><dd>Список «ключ → значение». Ключ — номер посылки, <code>batchId</code>.</dd>
+    <dt><code>WeakSet</code></dt><dd>Набор объектов, который не мешает браузеру освободить память. Отличает «черновик ещё в форме» от «черновик уже отправлен».</dd>
+    <dt><code>Promise&lt;string&gt;</code></dt><dd>«Обещание строки»: пропуск может ещё быть в пути с сервера. Два запроса, попросившие его одновременно, дождутся одного ответа.</dd>
+  </dl>
+
+  <h3>Методы</h3>
+  <dl class="pairs">
+    <dt><code>constructor</code></dt><dd>Вешает обработчик <code>beforeunload</code>: если закрыть вкладку при незавершённых загрузках, браузер спросит «Точно уйти?».</dd>
+    <dt><code>createDraft</code></dt><dd>Создаёт тележку с правилами: лимиты 25 и 100&nbsp;ГБ, проверка формата и дублей, плагин Tus с пропуском в каждом запросе, повтором при <code>401</code> и защитой из раздела 13.</dd>
+    <dt><code>discardDraft</code></dt><dd>Выбрасывает тележку, если её ещё не отправили. Отправленную не трогает — это уже пакет.</dd>
+    <dt><code>startBatch</code></dt><dd>Оформляет посылку. Черновик помечается как отправленный <strong>до</strong> запроса к серверу, поэтому закрытие формы во время ожидания его не уничтожит. Здесь же диспетчер подписывается на события тележки: <code>progress</code>, <code>upload-success</code>, <code>upload-error</code>.</dd>
+    <dt><code>startNext</code></dt><dd>Есть активный пакет — ждём. Нет — берём первый <code>queued</code> и запускаем.</dd>
+    <dt><code>run</code></dt><dd>Запускает или продолжает пакет. Все файлы уже загружены — сразу <code>complete</code>. Иначе <code>uppy.upload()</code>: Uppy сам перезапустит файлы с ошибкой и начнёт ещё не начатые.</dd>
+    <dt><code>complete</code></dt><dd>Сообщает серверу «всё привезли». Получилось — убираем пакет, выбрасываем пропуск, запускаем следующий. Нет — <code>handleError</code>.</dd>
+    <dt><code>handleError</code></dt><dd>Временная ошибка — таймер на 10 секунд (один на пакет). Постоянная — запоминаем текст и отменяем таймер.</dd>
+    <dt><code>failIfStuck</code></dt><dd>Есть постоянная ошибка и ни один файл уже не грузится? Пакет переходит в <code>failed</code>, запускается следующий.</dd>
+    <dt><code>retryBatchNow</code></dt><dd>Кнопка «Повторить». Пакет в очереди — ничего. Пакет в <code>failed</code> — в конец очереди. Активный — повтор сразу. Этот же метод вызывает таймер автоповтора.</dd>
+    <dt><code>cancelBatch</code></dt><dd>Кнопка «Отменить»: убрать пакет (Uppy остановит загрузку и попросит сервер удалить недогруженное), запустить следующий, сообщить серверу, выбросить пропуск.</dd>
+    <dt><code>getUploadToken</code></dt><dd>Отдаёт пропуск: из памяти или, если его нет, просит у сервера.</dd>
+    <dt>Помощники</dt><dd><code>remove</code> — убрать пакет; <code>clearRetry</code> — отменить таймер; <code>notify</code> — сделать снимок и сообщить подписчикам; <code>toView</code> — данные пакета для интерфейса; <code>isRetryable</code> — временная ли ошибка.</dd>
+  </dl>
+</section>
+
+<section id="files">
+  <h2><span class="num">18</span>Остальные файлы</h2>
+  <p>Всё лежит в <code>src/upload/</code>:</p>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Файл</th><th>Что внутри</th></tr></thead>
+      <tbody>
+        <tr><td><code>types.ts</code></td><td class="wrap">Описания типов: как выглядит пакет, какие запросы к серверу нужны (<code>UploadApi</code>)</td></tr>
+        <tr><td><code>fileRules.ts</code></td><td class="wrap">Лимиты (25 и 100&nbsp;ГБ) и список разрешённых форматов</td></tr>
+        <tr><td><code>formatSize.ts</code></td><td class="wrap">Перевод байтов в понятное «1,5 ГБ»</td></tr>
+        <tr><td><code>hooks.ts</code></td><td class="wrap">Хуки <code>useUploadBatches</code> (текущие загрузки) и <code>useUploadDraft</code> (черновик формы)</td></tr>
+        <tr><td><code>components/UploadForm.tsx</code></td><td class="wrap">Форма: тип данных, файлы, кнопка «Загрузить»</td></tr>
+        <tr><td><code>components/FileDropzone.tsx</code></td><td class="wrap">Зона «Перетащите файлы сюда» и причины, почему файл не добавлен</td></tr>
+        <tr><td><code>components/FileList.tsx</code></td><td class="wrap">Выбранные файлы с кнопкой «Убрать»</td></tr>
+        <tr><td><code>components/BatchList.tsx</code></td><td class="wrap">Текущие загрузки: прогресс, статус, «Повторить» при ошибке, «Отменить»</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Формат проверяем по окончанию имени (<code>.zip</code>, <code>.mp4</code>), а не по «типу файла», который сообщает браузер: для архивов и MBTiles браузер часто сообщает пустой или неправильный тип.</p>
+</section>
+
+<section id="usage">
+  <h2><span class="num">19</span>Как этим пользоваться</h2>
+  <h3>Подключить</h3>
+<pre><code><span class="c">// 1. Один раз на всё приложение — у нас это src/services/Uploader.ts.</span>
+<span class="c">//    Остальные файлы делают import { uploadManager } from '…/services/Uploader'.</span>
+<span class="c">//    http — HTTP-клиент приложения;</span>
+<span class="c">//    при ошибке он должен выбрасывать ошибку с полем status.</span>
+export const uploadManager = new UploadManager({
+  tusEndpoint: '/api/uploads/', <span class="c">// точный путь даст бэкенд</span>
+  api: {
+    createBatch: (input) =&gt; http.post('/api/batches', input),
+    issueUploadToken: (batchId) =&gt;
+      http.post(`/api/batches/${batchId}/upload-token`).then((response) =&gt; response.token),
+    completeBatch: (batchId) =&gt; http.post(`/api/batches/${batchId}/complete`),
+    cancelBatch: (batchId) =&gt; http.delete(`/api/batches/${batchId}`),
+  },
+});
+
+<span class="c">// 2. В модальном окне — форма. После отправки окно закрываем.</span>
+&lt;UploadForm manager={uploadManager} onSubmitted={closeModal} /&gt;
+
+<span class="c">// 3. Где-нибудь на странице — список текущих загрузок.</span>
+&lt;BatchList manager={uploadManager} /&gt;</code></pre>
+
+  <h3>Частые изменения</h3>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Нужно</th><th>Где</th></tr></thead>
+      <tbody>
+        <tr><td>Поменять лимиты</td><td class="wrap"><code>fileRules.ts</code>: <code>MAX_FILE_SIZE</code>, <code>MAX_BATCH_SIZE</code>. И сказать бэкенду — у него те же лимиты</td></tr>
+        <tr><td>Добавить формат</td><td class="wrap"><code>fileRules.ts</code>: массив <code>ALLOWED_NAME_PATTERNS</code></td></tr>
+        <tr><td>Сколько файлов грузить сразу</td><td class="wrap"><code>UploadManager.ts</code>, <code>createDraft</code>: настройка <code>limit</code></td></tr>
+        <tr><td>Пауза перед автоповтором</td><td class="wrap"><code>UploadManager.ts</code>: <code>RETRY_INTERVAL</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note warn"><span class="tag">Чего делать нельзя</span>
+    <ul>
+      <li><strong>Создавать <code>UploadManager</code> внутри компонента</strong> — загрузка будет пропадать вместе с компонентом.</li>
+      <li><strong>Вызывать <code>uppy.destroy()</code> у пакета «просто так»</strong>, например при закрытии окна, — это остановит загрузку и удалит недогруженные файлы на сервере.</li>
+      <li><strong>Убирать защиту <code>HEAD</code></strong> в <code>onAfterResponse</code> — вернётся «начать сначала».</li>
+      <li><strong>Класть сами файлы (<code>File</code>) в состояние формы или в <code>localStorage</code></strong> — они огромные и живут только в тележке Uppy.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="decisions">
+  <h2><span class="num">20</span>Почему решения именно такие</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Решение</th><th>Почему</th></tr></thead>
+      <tbody>
+        <tr><td>Протокол Tus</td><td class="wrap">Даёт продолжение с места остановки — главное требование</td></tr>
+        <tr><td>Библиотека Uppy</td><td class="wrap">Проверки файлов, прогресс, повторы и работа с Tus уже готовы и проверены</td></tr>
+        <tr><td>Диспетчер вне компонентов</td><td class="wrap">Закрытие окна не должно обрывать загрузку</td></tr>
+        <tr><td>Пакет вместо файлов</td><td class="wrap">Тома архива и метаданные — одно целое</td></tr>
+        <tr><td>Тележка на каждый пакет</td><td class="wrap">Пакеты не путаются, лимит 100&nbsp;ГБ считается на пакет, отмена одного не трогает другие</td></tr>
+        <tr><td>Очередь пакетов</td><td class="wrap">Просьба аналитика; первая посылка приходит раньше; меньше нагрузка</td></tr>
+        <tr><td>Свой автоповтор</td><td class="wrap">Встроенные повторы tus сдаются примерно за 9 секунд, а продолжить нужно, когда сервер вернётся, — хоть через час</td></tr>
+        <tr><td>Отдельный пропуск</td><td class="wrap">Загрузка может длиться дольше, чем живёт обычный пропуск пользователя</td></tr>
+        <tr><td>Защита <code>HEAD</code></td><td class="wrap">Без неё короткий сбой сервера заставлял загружать файл с нуля (проверено тестом)</td></tr>
+        <tr><td>Файл целиком, без кусков</td><td class="wrap">Так советует документация Uppy и tus: куски нужны, только если сервер ограничивает размер запроса. При обрыве сервер сохраняет всё, что успел получить, если nginx настроен, как договорились с бэкендом</td></tr>
+        <tr><td>Без <code>localStorage</code></td><td class="wrap">Продолжение после закрытия вкладки пока не требуется, а старые записи только мешали бы</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="whatif">
+  <h2><span class="num">21</span>Что будет, если…</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Ситуация</th><th>Что произойдёт</th></tr></thead>
+      <tbody>
+        <tr><td class="wrap">Закрыли окно во время загрузки</td><td class="wrap"><span class="chip st-uploading">грузится</span> Загрузка продолжается, её видно в списке загрузок</td></tr>
+        <tr><td class="wrap">Закрыли окно во время отправки формы</td><td class="wrap"><span class="chip st-queued">в очереди</span> Загрузка всё равно начнётся</td></tr>
+        <tr><td class="wrap">Пропал интернет на минуту</td><td class="wrap"><span class="chip st-waiting">ждём повтора</span> «Нет связи с сервером. Повторим автоматически». Связь вернулась — продолжение с того же места</td></tr>
+        <tr><td class="wrap">Сервер перезагрузили</td><td class="wrap"><span class="chip st-waiting">ждём повтора</span> То же самое</td></tr>
+        <tr><td class="wrap">Устарел пропуск</td><td class="wrap"><span class="chip st-uploading">грузится</span> Диспетчер незаметно получает новый и продолжает</td></tr>
+        <tr><td class="wrap">Сервер ответил «нет доступа»</td><td class="wrap"><span class="chip st-failed">ошибка</span> Следующие пакеты загружаются дальше. Можно нажать «Повторить» или «Отменить»</td></tr>
+        <tr><td class="wrap">Нажали «Отменить»</td><td class="wrap">Загрузка останавливается, данные на сервере удаляются, стартует следующий пакет</td></tr>
+        <tr><td class="wrap">Закрыли вкладку браузера</td><td class="wrap">Браузер спросит «Точно уйти?». Если уйти, загрузка прервётся: продолжение после закрытия вкладки пока не сделано</td></tr>
+        <tr><td class="wrap">Отправили второй пакет, пока грузится первый</td><td class="wrap"><span class="chip st-queued">в очереди</span> Второй ждёт и стартует сам</td></tr>
+        <tr><td class="wrap">Пакет загрузился</td><td class="wrap">Сервер подтвердил — пакет пропадает из списка текущих загрузок</td></tr>
+        <tr><td class="wrap">Бросили файл мимо зоны, пока открыта форма</td><td class="wrap">Ничего: браузер не откроет файл и не уйдёт со страницы</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="glossary">
+  <h2><span class="num">22</span>Словарик</h2>
+  <dl class="pairs">
+    <dt>Браузер</dt><dd>Программа, в которой открыт сайт</dd>
+    <dt>Сервер</dt><dd>Удалённый компьютер, который принимает файлы</dd>
+    <dt>Фронтенд / бэкенд</dt><dd>Код в браузере (наш) / код на сервере</dd>
+    <dt>Запрос / ответ</dt><dd>Сообщение браузера серверу и ответ сервера</dd>
+    <dt>Код ответа</dt><dd>Число в ответе: 200 — хорошо, 401 — нужен новый пропуск, 403 — нельзя, 5xx — сбой сервера</dd>
+    <dt>API</dt><dd>Набор запросов, которые понимает сервер</dd>
+    <dt>Токен</dt><dd>Электронный пропуск, который прикладывается к запросу</dd>
+    <dt>Tus</dt><dd>Правила загрузки «с закладкой»</dd>
+    <dt>Смещение (offset)</dt><dd>«Закладка»: сколько байт файла сервер уже получил</dd>
+    <dt>Uppy</dt><dd>Библиотека загрузки файлов; один её экземпляр — «тележка» с файлами</dd>
+    <dt>Плагин</dt><dd>Дополнение к Uppy; плагин Tus возит файлы по правилам Tus</dd>
+    <dt>Пакет (batch)</dt><dd>Одна загрузка: несколько файлов плюс метаданные</dd>
+    <dt>Метаданные</dt><dd>Описание загрузки: тип данных и другие поля формы</dd>
+    <dt>Черновик</dt><dd>Пакет до нажатия «Загрузить»</dd>
+    <dt>Очередь</dt><dd>Порядок, в котором загружаются пакеты</dd>
+    <dt>Событие</dt><dd>Сообщение, которое Uppy присылает сам: «файл загружен», «ошибка»</dd>
+    <dt>Компонент</dt><dd>Кусочек интерфейса на React: форма, кнопка, список</dd>
+    <dt>Хук</dt><dd>Функция React, которая подключает компонент к данным</dd>
+    <dt>Монтирование</dt><dd>Компонент появился на экране; размонтирование — исчез</dd>
+    <dt>Promise, async/await</dt><dd>Способ работать с тем, что придёт не сразу, например с ответом сервера</dd>
+    <dt>Снимок (snapshot)</dt><dd>«Фотография» состояния загрузок для интерфейса</dd>
+  </dl>
+</section>
+
+</main>
+
+<footer>
+  Описан код по состоянию на 12.10.2026. Подробная техническая спецификация — <code>UPPY_UPLOAD_IMPLEMENTATION.md</code>, текстовая версия этого объяснения — <code>UPLOAD_MANAGER_EXPLAINED.md</code>.
+</footer>
+
+</div>
+
+<script>
+// Песочница: упрощённая модель очереди UploadManager.
+(function () {
+  var RETRY_SECONDS = 3; // в настоящем коде цикл повтора около 20 секунд
+  var TICK_MS = 250;
+
+  var listEl = document.getElementById('sim-list');
+  var logEl = document.getElementById('sim-log-text');
+  var doneEl = document.getElementById('sim-done');
+  var netBtn = document.getElementById('sim-net');
+  var netState = document.getElementById('sim-net-state');
+  if (!listEl) return;
+
+  var online = true;
+  var nextNumber = 1;
+  var batches = [];
+  var done = [];
+
+  function addBatch(progress) {
+    var batch = { n: nextNumber++, phase: 'queued', progress: progress || 0, waiting: false, retryIn: 0, finishIn: 0 };
+    batches.push(batch);
+    return batch;
+  }
+
+  function active() {
+    for (var i = 0; i < batches.length; i++) {
+      if (batches[i].phase === 'uploading' || batches[i].phase === 'completing') return batches[i];
+    }
+    return null;
+  }
+
+  function say(text) { logEl.textContent = text; }
+
+  function startNext() {
+    if (active()) return;
+    for (var i = 0; i < batches.length; i++) {
+      if (batches[i].phase === 'queued') {
+        batches[i].phase = 'uploading';
+        say('Пакет №' + batches[i].n + ' дождался очереди и начал загружаться.');
+        return;
+      }
+    }
+  }
+
+  function tick() {
+    var a = active();
+    if (a) {
+      if (a.waiting) {
+        a.retryIn -= TICK_MS / 1000;
+        if (a.retryIn <= 0) {
+          if (online) {
+            a.waiting = false;
+            say('Повтор для пакета №' + a.n + ': связь есть — продолжаем с закладки, с ' + Math.round(a.progress * 100) + '%.');
+          } else {
+            a.retryIn = RETRY_SECONDS;
+            say('Повтор для пакета №' + a.n + ': связи всё ещё нет. Попробуем снова. Остальные пакеты ждут.');
+          }
+        }
+      } else if (!online) {
+        a.waiting = true;
+        a.retryIn = RETRY_SECONDS;
+        say('Связь пропала. Пакет №' + a.n + ' ждёт повтора и держит очередь: следующим без связи всё равно не загрузиться.');
+      } else if (a.phase === 'uploading') {
+        a.progress = Math.min(1, a.progress + 0.02);
+        if (a.progress >= 1) {
+          a.phase = 'completing';
+          a.finishIn = 1.2;
+          say('Все файлы пакета №' + a.n + ' загружены. Сообщаем серверу: «всё привезли».');
+        }
+      } else {
+        a.finishIn -= TICK_MS / 1000;
+        if (a.finishIn <= 0) {
+          batches = batches.filter(function (b) { return b !== a; });
+          done.unshift(a.n);
+          done = done.slice(0, 8);
+          say('Сервер подтвердил пакет №' + a.n + '. Диспетчер убрал его из списка и берёт следующий.');
+        }
+      }
+    }
+    startNext();
+    render();
+  }
+
+  function stateOf(b) {
+    if (b.phase === 'uploading' && b.waiting) return 'waiting';
+    return b.phase;
+  }
+
+  function statusText(b) {
+    var state = stateOf(b);
+    if (state === 'queued') return 'в очереди';
+    if (state === 'waiting') return 'нет связи · повтор через ' + Math.max(1, Math.ceil(b.retryIn)) + ' с';
+    if (state === 'uploading') return 'грузится · ' + Math.round(b.progress * 100) + '%';
+    if (state === 'completing') return 'завершение';
+    return 'ошибка: нет доступа';
+  }
+
+  var chipClass = { queued: 'st-queued', uploading: 'st-uploading', waiting: 'st-waiting', completing: 'st-completing', failed: 'st-failed' };
+
+  function render() {
+    if (batches.length === 0) {
+      listEl.innerHTML = '<li class="sim-empty">Сейчас ничего не загружается. Нажмите «Отправить пакет».</li>';
+    } else {
+      var html = '';
+      batches.forEach(function (b) {
+        var state = stateOf(b);
+        var canRetry = state === 'failed';
+        html += '<li class="sim-batch" data-state="' + state + '">' +
+          '<div class="sim-row"><strong>Пакет №' + b.n + '</strong>' +
+          '<span class="chip ' + chipClass[state] + '">' + statusText(b) + '</span>' +
+          '<span class="sim-actions">' +
+          (canRetry ? '<button type="button" class="btn btn-small" data-retry="' + b.n + '">Повторить</button>' : '') +
+          '<button type="button" class="btn btn-small" data-cancel="' + b.n + '">Отменить</button>' +
+          '</span></div>' +
+          '<div class="sim-bar" aria-hidden="true"><span style="width:' + Math.round(b.progress * 100) + '%"></span></div>' +
+          '</li>';
+      });
+      listEl.innerHTML = html;
+    }
+    doneEl.innerHTML = done.length
+      ? 'Готово и подтверждено сервером: ' + done.map(function (n) { return '<span class="chip st-completing">№' + n + '</span>'; }).join(' ')
+      : '';
+  }
+
+  function find(n) {
+    for (var i = 0; i < batches.length; i++) if (batches[i].n === n) return batches[i];
+    return null;
+  }
+
+  document.getElementById('sim-add').addEventListener('click', function () {
+    var b = addBatch(0);
+    var wasIdle = !active();
+    say('Пакет №' + b.n + ' создан на сервере и встал в очередь.');
+    if (wasIdle) startNext();
+    render();
+  });
+
+  netBtn.addEventListener('click', function () {
+    online = !online;
+    netBtn.textContent = online ? 'Оборвать связь' : 'Вернуть связь';
+    netState.textContent = online ? 'связь есть' : 'связи нет';
+    netState.className = 'net chip ' + (online ? 'st-completing' : 'st-failed');
+    say(online
+      ? 'Связь вернулась. Ближайший повтор продолжит загрузку с закладки.'
+      : 'Связь пропала. Посмотрите, что сделает активный пакет.');
+    render();
+  });
+
+  document.getElementById('sim-fail').addEventListener('click', function () {
+    var a = active();
+    if (!a) { say('Сейчас ничего не загружается — ошибке не к кому прийти.'); return; }
+    a.phase = 'failed';
+    a.waiting = false;
+    say('Сервер ответил пакету №' + a.n + ' «нет доступа». Повтор не поможет: пакет помечен ошибкой и отпустил очередь.');
+    startNext();
+    render();
+  });
+
+  listEl.addEventListener('click', function (event) {
+    var target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    var retry = target.getAttribute('data-retry');
+    var cancel = target.getAttribute('data-cancel');
+    if (retry) {
+      var b = find(Number(retry));
+      if (!b) return;
+      if (b.phase === 'failed') {
+        batches = batches.filter(function (x) { return x !== b; });
+        b.phase = 'queued';
+        batches.push(b);
+        say('Пакет №' + b.n + ' вернулся в конец очереди. Сразу его не запускаем: активен только один пакет.');
+        startNext();
+      } else if (b.waiting) {
+        b.retryIn = 0;
+        say('Повторяем пакет №' + b.n + ' прямо сейчас, не дожидаясь таймера.');
+      }
+      render();
+    } else if (cancel) {
+      var c = find(Number(cancel));
+      if (!c) return;
+      batches = batches.filter(function (x) { return x !== c; });
+      say('Пакет №' + c.n + ' отменён: загрузка остановлена, недогруженное на сервере удаляется.');
+      startNext();
+      render();
+    }
+  });
+
+  addBatch(0.4);
+  addBatch(0);
+  addBatch(0);
+  batches[0].phase = 'uploading';
+  render();
+  setInterval(tick, TICK_MS);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,646 @@
+<title>API загрузки пакетов</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans+Condensed:wght@600&family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+/* Технический документ в одну колонку: схема-обзор сверху, дальше шаги по порядку запросов.
+   Два цвета кодируют два вида запросов: API (access-токен) и Tus (upload-токен). */
+:root {
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --fg: #1a1e26;
+  --muted: #5a6373;
+  --line: #d8dde5;
+  --code-bg: #eef1f5;
+  --api: #2a56c6;
+  --api-bg: #e7edfb;
+  --tus: #0d7566;
+  --tus-bg: #e1f3ef;
+  --err: #be3328;
+  --err-bg: #fbe8e5;
+  --note: #8d5c00;
+  --note-bg: #fbf0d9;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", "Roboto Condensed", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111419; --surface: #191d24; --fg: #e5e8ee; --muted: #9aa3b2; --line: #2b313b; --code-bg: #141820;
+    --api: #8aa8ff; --api-bg: #1b2541; --tus: #55c7b2; --tus-bg: #11302a;
+    --err: #ff8073; --err-bg: #3a1c19; --note: #e6b65e; --note-bg: #33270e;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111419; --surface: #191d24; --fg: #e5e8ee; --muted: #9aa3b2; --line: #2b313b; --code-bg: #141820;
+  --api: #8aa8ff; --api-bg: #1b2541; --tus: #55c7b2; --tus-bg: #11302a;
+  --err: #ff8073; --err-bg: #3a1c19; --note: #e6b65e; --note-bg: #33270e;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 16px/1.6 var(--font-body);
+}
+.page { max-width: 920px; margin: 0 auto; padding-inline: 16px; padding-block: 40px 72px; }
+table, input, button { font: inherit; color: inherit; }
+
+h1, h2, h3 { font-family: var(--font-display); font-weight: 600; text-wrap: balance; line-height: 1.2; }
+h1 { font-size: 2.1rem; margin: 0 0 8px; letter-spacing: -0.01em; }
+h2 { font-size: 1.45rem; margin: 56px 0 14px; }
+h3 { font-size: 1.15rem; margin: 0; }
+p { margin: 0 0 12px; max-width: 68ch; }
+a { color: var(--api); }
+.lead { color: var(--muted); font-size: 1.05rem; }
+.meta { font-size: 0.85rem; color: var(--muted); letter-spacing: 0.02em; }
+code, pre { font-family: var(--font-mono); font-size: 0.86em; }
+:not(pre) > code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+
+.tag { display: inline-flex; align-items: center; gap: 6px; padding: 2px 9px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
+.tag.api { color: var(--api); background: var(--api-bg); }
+.tag.tus { color: var(--tus); background: var(--tus-bg); }
+.tag.none { color: var(--muted); background: var(--code-bg); }
+
+.summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; margin: 28px 0 0; }
+.summary > div { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+.summary b { display: block; margin-bottom: 4px; }
+.summary p { margin: 0; font-size: 0.93rem; color: var(--muted); }
+
+figure { margin: 20px 0 0; }
+.fig-scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 8px; }
+.fig-scroll svg { display: block; width: 100%; min-width: 700px; height: auto; }
+figcaption { font-size: 0.9rem; color: var(--muted); margin-top: 10px; max-width: 72ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 10px; font-size: 0.85rem; color: var(--muted); align-items: center; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { display: inline-block; width: 26px; height: 0; border-top: 2px solid; }
+.legend i.api { border-color: var(--api); }
+.legend i.tus { border-color: var(--tus); }
+.legend i.dash { border-top-style: dashed; border-color: var(--muted); }
+
+/* SVG */
+.lifeline { stroke: var(--line); stroke-width: 1.5; stroke-dasharray: 4 5; }
+.pbox { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+.pbox.api { stroke: var(--api); }
+.pbox.tus { stroke: var(--tus); }
+.t { fill: var(--fg); font: 600 13px var(--font-body); }
+.t-sm { fill: var(--muted); font: 400 11.5px var(--font-body); }
+.t-mono { fill: var(--fg); font: 400 12px var(--font-mono); }
+.t-api { fill: var(--api); }
+.t-tus { fill: var(--tus); }
+.t-err { fill: var(--err); }
+.ar { fill: none; stroke-width: 1.8; }
+.ar.api { stroke: var(--api); }
+.ar.tus { stroke: var(--tus); }
+.ar.neu { stroke: var(--muted); }
+.ar.ret { stroke-dasharray: 6 4; }
+.ar.err { stroke: var(--err); }
+.mk-api { fill: var(--api); }
+.mk-tus { fill: var(--tus); }
+.mk-neu { fill: var(--muted); }
+.grp { fill: none; stroke: var(--tus); stroke-width: 1.2; stroke-dasharray: 3 4; opacity: 0.8; }
+.wait { fill: var(--note-bg); stroke: var(--note); stroke-width: 1; }
+.t-note { fill: var(--note); font: 600 11.5px var(--font-body); }
+
+/* Шаги */
+.step { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; margin-top: 18px; scroll-margin-top: 16px; }
+.step-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.num { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; font: 600 0.9rem var(--font-display); background: var(--code-bg); color: var(--fg); flex: none; }
+.step.api .num { background: var(--api-bg); color: var(--api); }
+.step.tus .num { background: var(--tus-bg); color: var(--tus); }
+.step-head .when { flex-basis: 100%; font-size: 0.92rem; color: var(--muted); margin: 0; }
+.rows { display: grid; grid-template-columns: 150px minmax(0, 1fr); }
+.rows > dt, .rows > dd { padding: 12px 18px; border-bottom: 1px solid var(--line); margin: 0; min-width: 0; }
+.rows > dt { font-size: 0.78rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); padding-top: 15px; }
+.rows > dt:nth-last-of-type(1), .rows > dd:last-child { border-bottom: 0; }
+.rows dd p:last-child, .rows dd ul:last-child { margin-bottom: 0; }
+.rows dd ul { margin: 0 0 10px; padding-left: 20px; }
+.rows dd li { margin-bottom: 4px; }
+dd.backend { background: var(--note-bg); }
+dt.backend { background: var(--note-bg); color: var(--note); }
+@media (max-width: 640px) {
+  .rows { grid-template-columns: minmax(0, 1fr); }
+  .rows > dt { border-bottom: 0; padding-bottom: 0; }
+}
+
+pre.http { margin: 0 0 10px; background: var(--code-bg); border-radius: 8px; padding: 12px 14px; overflow-x: auto; line-height: 1.55; tab-size: 2; }
+pre.http:last-child { margin-bottom: 0; }
+.m { font-weight: 600; }
+.m.api { color: var(--api); }
+.m.tus { color: var(--tus); }
+.h { color: var(--muted); }
+.st { font-weight: 600; color: var(--tus); }
+.st.api { color: var(--api); }
+.c { color: var(--muted); font-style: italic; }
+
+.flow { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.flow li { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline; }
+.flow .arrow { color: var(--muted); }
+
+.tbl { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; margin-top: 14px; }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; vertical-align: top; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+th { font-size: 0.78rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); background: var(--code-bg); }
+tr:last-child td { border-bottom: 0; }
+td.ok { color: var(--tus); font-weight: 600; }
+td.retry { color: var(--note); font-weight: 600; }
+td.fail { color: var(--err); font-weight: 600; }
+.tbl table { min-width: 620px; }
+
+.checklist { list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 8px; }
+.checklist li { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px 10px 40px; position: relative; max-width: none; }
+.checklist li::before { content: ""; position: absolute; left: 14px; top: 15px; width: 12px; height: 12px; border: 2px solid var(--muted); border-radius: 3px; }
+.callout { background: var(--note-bg); border-radius: 10px; padding: 12px 16px; margin-top: 14px; }
+.callout p { margin: 0; }
+footer { margin-top: 56px; font-size: 0.85rem; color: var(--muted); }
+</style>
+
+<div class="page">
+
+<header>
+  <p class="meta">Фронтенд загрузки данных · версия от 13.10.2026 · минимальная рабочая версия</p>
+  <h1>API загрузки пакетов</h1>
+  <p class="lead">Какие запросы отправляет браузер, когда пользователь загружает файлы: адрес, заголовки, тело, что фронтенд ждёт в ответ и куда кладёт данные из ответа. Пути и форматы — предложение фронтенда. Если у бэкенда удобнее по-другому, скажите, фронтенд подстроится.</p>
+
+  <div class="summary">
+    <div>
+      <b><span class="tag api">API</span> Обычные запросы</b>
+      <p>JSON-запросы к <code>/api/batches</code>. Авторизация — access-токен пользователя, как во всём приложении.</p>
+    </div>
+    <div>
+      <b><span class="tag tus">Tus</span> Передача файлов</b>
+      <p>Протокол Tus 1.0: создать загрузку, отправить байты, при обрыве спросить смещение. Авторизация — upload-токен пакета.</p>
+    </div>
+    <div>
+      <b>Один домен</b>
+      <p>Всё идёт через nginx на 443, на тот же домен, что и приложение. CORS не нужен.</p>
+    </div>
+  </div>
+</header>
+
+<section id="overview">
+  <h2>Весь путь на одной схеме</h2>
+  <p>Пример: пакет «видео» из двух файлов. Цифры на стрелках — номера шагов ниже.</p>
+  <figure>
+    <div class="fig-scroll">
+      <svg viewBox="0 0 760 700" role="img" aria-label="Последовательность запросов: фронтенд создаёт пакет в API и получает batchId, затем получает upload-токен, затем для каждого файла создаёт загрузку на Tus-сервере, отправляет байты, после обрыва спрашивает смещение и догружает остаток, в конце сообщает API о завершении пакета">
+        <defs>
+          <marker id="a-api" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-api"/></marker>
+          <marker id="a-tus" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-tus"/></marker>
+          <marker id="a-neu" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" class="mk-neu"/></marker>
+        </defs>
+
+        <!-- Участники -->
+        <rect x="12" y="14" width="116" height="46" rx="8" class="pbox"/>
+        <text x="70" y="42" text-anchor="middle" class="t">Пользователь</text>
+        <rect x="185" y="14" width="150" height="46" rx="8" class="pbox"/>
+        <text x="260" y="34" text-anchor="middle" class="t">Фронтенд</text>
+        <text x="260" y="51" text-anchor="middle" class="t-sm">UploadManager + Uppy</text>
+        <rect x="405" y="14" width="150" height="46" rx="8" class="pbox api"/>
+        <text x="480" y="34" text-anchor="middle" class="t t-api">API бэкенда</text>
+        <text x="480" y="51" text-anchor="middle" class="t-sm">access-токен</text>
+        <rect x="595" y="14" width="150" height="46" rx="8" class="pbox tus"/>
+        <text x="670" y="34" text-anchor="middle" class="t t-tus">Tus-сервер</text>
+        <text x="670" y="51" text-anchor="middle" class="t-sm">upload-токен</text>
+
+        <line x1="70" y1="60" x2="70" y2="690" class="lifeline"/>
+        <line x1="260" y1="60" x2="260" y2="690" class="lifeline"/>
+        <line x1="480" y1="60" x2="480" y2="690" class="lifeline"/>
+        <line x1="670" y1="60" x2="670" y2="690" class="lifeline"/>
+
+        <!-- Создание пакета -->
+        <line x1="70" y1="98" x2="254" y2="98" class="ar neu" marker-end="url(#a-neu)"/>
+        <text x="165" y="90" text-anchor="middle" class="t-sm">нажал «Загрузить»</text>
+
+        <line x1="260" y1="138" x2="474" y2="138" class="ar api" marker-end="url(#a-api)"/>
+        <text x="367" y="130" text-anchor="middle" class="t-mono"><tspan class="t-api" font-weight="600">1</tspan> POST /api/batches</text>
+        <line x1="480" y1="170" x2="266" y2="170" class="ar api ret" marker-end="url(#a-api)"/>
+        <text x="373" y="162" text-anchor="middle" class="t-mono">201 { batchId }</text>
+
+        <rect x="206" y="186" width="108" height="22" rx="11" class="wait"/>
+        <text x="260" y="201" text-anchor="middle" class="t-note">ждёт очереди</text>
+
+        <!-- Токен -->
+        <line x1="260" y1="240" x2="474" y2="240" class="ar api" marker-end="url(#a-api)"/>
+        <text x="367" y="232" text-anchor="middle" class="t-mono"><tspan class="t-api" font-weight="600">2</tspan> POST …/upload-token</text>
+        <line x1="480" y1="272" x2="266" y2="272" class="ar api ret" marker-end="url(#a-api)"/>
+        <text x="373" y="264" text-anchor="middle" class="t-mono">200 { token }</text>
+
+        <!-- Файлы -->
+        <rect x="196" y="290" width="556" height="282" rx="10" class="grp"/>
+        <text x="206" y="307" class="t-sm">для каждого файла, до 4 одновременно</text>
+
+        <line x1="260" y1="340" x2="664" y2="340" class="ar tus" marker-end="url(#a-tus)"/>
+        <text x="465" y="332" text-anchor="middle" class="t-mono"><tspan class="t-tus" font-weight="600">3</tspan> POST /api/uploads/ · Upload-Length, Upload-Metadata</text>
+        <line x1="670" y1="372" x2="266" y2="372" class="ar tus ret" marker-end="url(#a-tus)"/>
+        <text x="465" y="364" text-anchor="middle" class="t-mono">201 · Location: адрес загрузки</text>
+
+        <line x1="260" y1="414" x2="512" y2="414" class="ar tus"/>
+        <path d="M514 406 L530 422 M530 406 L514 422" class="ar err"/>
+        <text x="386" y="406" text-anchor="middle" class="t-mono"><tspan class="t-tus" font-weight="600">4</tspan> PATCH · с байта 0</text>
+        <text x="540" y="419" class="t-sm t-err">обрыв на 12 ГиБ</text>
+
+        <line x1="260" y1="460" x2="664" y2="460" class="ar tus" marker-end="url(#a-tus)"/>
+        <text x="465" y="452" text-anchor="middle" class="t-mono"><tspan class="t-tus" font-weight="600">5</tspan> HEAD · сколько уже есть?</text>
+        <line x1="670" y1="492" x2="266" y2="492" class="ar tus ret" marker-end="url(#a-tus)"/>
+        <text x="465" y="484" text-anchor="middle" class="t-mono">200 · Upload-Offset: 12884901888</text>
+
+        <line x1="260" y1="526" x2="664" y2="526" class="ar tus" marker-end="url(#a-tus)"/>
+        <text x="465" y="518" text-anchor="middle" class="t-mono">PATCH · с байта 12884901888</text>
+        <line x1="670" y1="558" x2="266" y2="558" class="ar tus ret" marker-end="url(#a-tus)"/>
+        <text x="465" y="550" text-anchor="middle" class="t-mono">204 · Upload-Offset = размер файла</text>
+
+        <!-- Завершение -->
+        <line x1="260" y1="612" x2="474" y2="612" class="ar api" marker-end="url(#a-api)"/>
+        <text x="367" y="604" text-anchor="middle" class="t-mono"><tspan class="t-api" font-weight="600">7</tspan> POST …/complete</text>
+        <line x1="480" y1="644" x2="266" y2="644" class="ar api ret" marker-end="url(#a-api)"/>
+        <text x="373" y="636" text-anchor="middle" class="t-mono">202</text>
+
+        <line x1="260" y1="676" x2="76" y2="676" class="ar neu ret" marker-end="url(#a-neu)"/>
+        <text x="165" y="668" text-anchor="middle" class="t-sm">пакет загружен</text>
+      </svg>
+    </div>
+    <div class="legend">
+      <span><i class="api"></i> API, access-токен</span>
+      <span><i class="tus"></i> Tus, upload-токен</span>
+      <span><i class="dash"></i> ответ сервера</span>
+    </div>
+    <figcaption>Шаг 6 (истёк upload-токен) и шаг 8 (отмена) на схеме не показаны, они описаны ниже. Повторы после обрыва идут сами: пользователь ничего не нажимает.</figcaption>
+  </figure>
+</section>
+
+<section id="steps">
+  <h2>Шаги по порядку</h2>
+
+  <article class="step" id="step-0">
+    <div class="step-head">
+      <span class="num">0</span><h3>Выбор файлов</h3><span class="tag none">запросов нет</span>
+      <p class="when">Пользователь открыл форму, выбрал тип данных и перетащил файлы.</p>
+    </div>
+    <dl class="rows">
+      <dt>Что происходит</dt>
+      <dd>
+        <p>Всё проверяется в браузере, на сервер ничего не уходит:</p>
+        <ul>
+          <li>формат — по расширению имени файла;</li>
+          <li>размер файла — до 25 ГиБ (26843545600 байт);</li>
+          <li>сумма файлов пакета — до 100 ГиБ (107374182400 байт).</li>
+        </ul>
+        <p>ГиБ = 1024³ байт. Проверка в браузере нужна только для удобства, сервер проверяет то же самое сам.</p>
+      </dd>
+    </dl>
+  </article>
+
+  <article class="step api" id="step-1">
+    <div class="step-head">
+      <span class="num">1</span><h3>Создать пакет</h3><span class="tag api">API · access-токен</span>
+      <p class="when">Пользователь нажал «Загрузить». Один запрос на весь пакет.</p>
+    </div>
+    <dl class="rows">
+      <dt>Запрос</dt>
+      <dd>
+<pre class="http"><span class="m api">POST</span> /api/batches
+<span class="h">Authorization:</span> Bearer &lt;access-токен пользователя&gt;
+<span class="h">Content-Type:</span> application/json
+
+{
+  "dataType": "video",
+  "metadata": {},
+  "files": [
+    { "name": "flight_0412.mp4", "size": 21474836480 },
+    { "name": "flight_0413.mp4", "size": 4294967296 }
+  ]
+}</pre>
+        <ul>
+          <li><code>files</code> — только имена и размеры, без содержимого. Порядок важен: позиция файла в массиве — его номер <code>fileIndex</code> (0, 1, …).</li>
+          <li><code>metadata</code> пока пустой: поля по типам данных добавим, когда аналитик даст их список.</li>
+        </ul>
+      </dd>
+      <dt>Ответ</dt>
+      <dd>
+<pre class="http"><span class="st api">201 Created</span>
+<span class="h">Content-Type:</span> application/json
+
+{ "batchId": "7f3c9a2e" }</pre>
+      </dd>
+      <dt>Куда кладём</dt>
+      <dd>
+        <ul class="flow">
+          <li><code>batchId</code> <span class="arrow">→</span> очередь загрузок в памяти и метаданные каждого файла. Дальше он будет в адресах шагов 2, 7, 8 и в каждом Tus-запросе.</li>
+          <li><code>fileIndex</code> <span class="arrow">→</span> метаданные файла. Его выдаёт не сервер: это позиция файла в <code>files</code>.</li>
+        </ul>
+        <p>Пакет встаёт в очередь. Одновременно загружается один пакет, остальные ждут.</p>
+      </dd>
+      <dt>Если ошибка</dt>
+      <dd><p>Любая ошибка: форма показывает «Не удалось начать загрузку», файлы остаются в форме, пользователь может нажать ещё раз. Сам фронтенд этот запрос не повторяет.</p></dd>
+      <dt class="backend">Бэкенду</dt>
+      <dd class="backend"><p>Проверить метаданные и лимиты, сохранить манифест (список файлов в этом порядке). Тексты ошибок не должны упоминать внутренние контуры.</p></dd>
+    </dl>
+  </article>
+
+  <article class="step api" id="step-2">
+    <div class="step-head">
+      <span class="num">2</span><h3>Получить upload-токен</h3><span class="tag api">API · access-токен</span>
+      <p class="when">Очередь дошла до пакета, перед первым Tus-запросом. Повторно — после ответа 401 от Tus (шаг 6).</p>
+    </div>
+    <dl class="rows">
+      <dt>Запрос</dt>
+      <dd>
+<pre class="http"><span class="m api">POST</span> /api/batches/7f3c9a2e/upload-token
+<span class="h">Authorization:</span> Bearer &lt;access-токен пользователя&gt;</pre>
+        <p>Тела нет.</p>
+      </dd>
+      <dt>Ответ</dt>
+      <dd>
+<pre class="http"><span class="st api">200 OK</span>
+<span class="h">Content-Type:</span> application/json
+
+{ "token": "eyJhbGciOi…", "expiresAt": "2026-10-13T18:00:00Z" }</pre>
+      </dd>
+      <dt>Куда кладём</dt>
+      <dd>
+        <ul class="flow">
+          <li><code>token</code> <span class="arrow">→</span> только память вкладки, отдельно для каждого пакета. Не в <code>localStorage</code>. Подставляется в заголовок <code>Authorization</code> каждого Tus-запроса этого пакета.</li>
+          <li><code>expiresAt</code> <span class="arrow">→</span> не используем. Что токен устарел, фронтенд узнаёт по ответу 401.</li>
+        </ul>
+      </dd>
+      <dt>Если ошибка</dt>
+      <dd><p>Tus-запрос без токена не уходит, это считается сбоем связи: повтор по общим правилам (таблица ниже).</p></dd>
+      <dt class="backend">Бэкенду</dt>
+      <dd class="backend"><p>Зачем отдельный токен: загрузка 100 ГиБ может идти дольше сессии пользователя. Токен действует только для Tus-адреса и только для этого пакета, живёт часы. Можно запрашивать повторно. Отзывается после завершения или отмены пакета.</p></dd>
+    </dl>
+  </article>
+
+  <article class="step tus" id="step-3">
+    <div class="step-head">
+      <span class="num">3</span><h3>Создать загрузку файла</h3><span class="tag tus">Tus · upload-токен</span>
+      <p class="when">Для каждого файла пакета, до 4 файлов одновременно. Запрос только объявляет файл, байтов в нём нет.</p>
+    </div>
+    <dl class="rows">
+      <dt>Запрос</dt>
+      <dd>
+<pre class="http"><span class="m tus">POST</span> /api/uploads/                <span class="c">← путь уточняется у бэкенда</span>
+<span class="h">Authorization:</span> Bearer &lt;upload-токен&gt;
+<span class="h">Tus-Resumable:</span> 1.0.0
+<span class="h">Upload-Length:</span> 21474836480
+<span class="h">Upload-Metadata:</span> name ZmxpZ2h0XzA0MTIubXA0,type dmlkZW8vbXA0,batchId N2YzYzlhMmU=,fileIndex MA==,filetype dmlkZW8vbXA0,filename ZmxpZ2h0XzA0MTIubXA0</pre>
+        <p><code>Upload-Metadata</code> по правилам Tus: пары «ключ значение-в-base64» через запятую. В расшифрованном виде:</p>
+        <div class="tbl" style="margin-top:4px">
+          <table>
+            <thead><tr><th>Ключ</th><th>Значение</th><th>Что это</th></tr></thead>
+            <tbody>
+              <tr><td><code>batchId</code></td><td><code>7f3c9a2e</code></td><td>Из ответа шага 1</td></tr>
+              <tr><td><code>fileIndex</code></td><td><code>0</code></td><td>Позиция файла в <code>files</code> из шага 1. Приходит строкой</td></tr>
+              <tr><td><code>name</code>, <code>filename</code></td><td><code>flight_0412.mp4</code></td><td>Имя файла. Два ключа с одним значением добавляет сам Uppy</td></tr>
+              <tr><td><code>type</code>, <code>filetype</code></td><td><code>video/mp4</code></td><td>Тип от браузера. Для <code>.mbtiles</code>, <code>.rar</code>, <code>.z01</code> бывает пустым, доверять ему нельзя</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </dd>
+      <dt>Ответ</dt>
+      <dd>
+<pre class="http"><span class="st">201 Created</span>
+<span class="h">Tus-Resumable:</span> 1.0.0
+<span class="h">Location:</span> https://&lt;домен приложения&gt;/api/uploads/3b1e40c7</pre>
+      </dd>
+      <dt>Куда кладём</dt>
+      <dd>
+        <ul class="flow">
+          <li><code>Location</code> <span class="arrow">→</span> состояние файла в Uppy, только в памяти. Все следующие запросы по этому файлу (PATCH, HEAD, DELETE) идут на этот адрес.</li>
+        </ul>
+      </dd>
+      <dt class="backend">Бэкенду</dt>
+      <dd class="backend">
+        <ul>
+          <li>Проверить: токен выдан для этого <code>batchId</code>; <code>fileIndex</code> есть в манифесте и этот файл ещё не загружен целиком; <code>Upload-Length</code> совпадает с размером из манифеста. Метаданные присылает браузер, верить им без проверки нельзя.</li>
+          <li><code>Location</code> — внешний адрес, через nginx и https (для tusd флаг <code>-behind-proxy</code>), или путь без домена.</li>
+        </ul>
+      </dd>
+    </dl>
+  </article>
+
+  <article class="step tus" id="step-4">
+    <div class="step-head">
+      <span class="num">4</span><h3>Отправить содержимое</h3><span class="tag tus">Tus · upload-токен</span>
+      <p class="when">Сразу после шага 3.</p>
+    </div>
+    <dl class="rows">
+      <dt>Запрос</dt>
+      <dd>
+<pre class="http"><span class="m tus">PATCH</span> /api/uploads/3b1e40c7
+<span class="h">Authorization:</span> Bearer &lt;upload-токен&gt;
+<span class="h">Tus-Resumable:</span> 1.0.0
+<span class="h">Upload-Offset:</span> 0
+<span class="h">Content-Type:</span> application/offset+octet-stream
+
+&lt;байты файла с 0-го до конца&gt;</pre>
+        <p>Файл уходит <strong>одним запросом</strong> целиком, хоть 25 ГиБ: частями фронтенд не режет.</p>
+      </dd>
+      <dt>Ответ</dt>
+      <dd>
+<pre class="http"><span class="st">204 No Content</span>
+<span class="h">Tus-Resumable:</span> 1.0.0
+<span class="h">Upload-Offset:</span> 21474836480</pre>
+      </dd>
+      <dt>Куда кладём</dt>
+      <dd>
+        <ul class="flow">
+          <li><code>Upload-Offset</code> равен размеру файла <span class="arrow">→</span> файл загружен. Когда загружены все файлы пакета, переходим к шагу 7.</li>
+        </ul>
+        <p>Прогресс на экране браузер считает сам, по отправленным байтам. Для него ответы сервера не нужны.</p>
+      </dd>
+      <dt class="backend">Бэкенду</dt>
+      <dd class="backend"><p>Записывать данные на диск по мере поступления. Если связь оборвётся на 12 ГиБ, эти 12 ГиБ должны остаться на сервере. Поэтому в nginx для этого адреса: <code>proxy_request_buffering off</code> и <code>client_max_body_size 0</code>. С буферизацией nginx при обрыве ничего не передаст Tus-серверу, и загрузка начнётся с нуля.</p></dd>
+    </dl>
+  </article>
+
+  <article class="step tus" id="step-5">
+    <div class="step-head">
+      <span class="num">5</span><h3>После обрыва: узнать, сколько уже есть</h3><span class="tag tus">Tus · upload-токен</span>
+      <p class="when">Связь пропала или сервер ответил ошибкой. Tus-клиент сам повторяет через 0,1, 1, 3 и 5 секунд. Не помогло — фронтенд ждёт 10 секунд и начинает заново, и так без ограничения, пока не получится или пользователь не отменит пакет.</p>
+    </div>
+    <dl class="rows">
+      <dt>Запрос</dt>
+      <dd>
+<pre class="http"><span class="m tus">HEAD</span> /api/uploads/3b1e40c7
+<span class="h">Authorization:</span> Bearer &lt;upload-токен&gt;
+<span class="h">Tus-Resumable:</span> 1.0.0</pre>
+      </dd>
+      <dt>Ответ</dt>
+      <dd>
+<pre class="http"><span class="st">200 OK</span>
+<span class="h">Tus-Resumable:</span> 1.0.0
+<span class="h">Upload-Offset:</span> 12884901888
+<span class="h">Upload-Length:</span> 21474836480
+<span class="h">Cache-Control:</span> no-store</pre>
+      </dd>
+      <dt>Куда кладём</dt>
+      <dd>
+        <ul class="flow">
+          <li><code>Upload-Offset</code> <span class="arrow">→</span> никуда не сохраняем, сразу используем: следующий PATCH уходит с <code>Upload-Offset: 12884901888</code> и только с оставшимися байтами.</li>
+        </ul>
+        <p>Сколько загружено, всегда знает сервер. Браузер не гадает, а спрашивает, поэтому продолжение точное.</p>
+      </dd>
+      <dt class="backend">Бэкенду</dt>
+      <dd class="backend">
+        <ul>
+          <li><strong>404 или 410 на HEAD — только если загрузки правда нет</strong> (удалена или истекла). Получив такой ответ, фронтенд создаёт загрузку заново (шаг 3) и отправляет файл с нуля.</li>
+          <li>401 и 5xx на HEAD фронтенд считает временными и переспрашивает. Другие 4xx Tus-клиент тоже понимает как «загрузки нет».</li>
+          <li>Смещение должно переживать перезапуск Tus-сервера.</li>
+        </ul>
+      </dd>
+    </dl>
+  </article>
+
+  <article class="step tus" id="step-6">
+    <div class="step-head">
+      <span class="num">6</span><h3>Upload-токен устарел</h3><span class="tag tus">Tus</span><span class="tag api">API</span>
+      <p class="when">Любой Tus-запрос получил 401.</p>
+    </div>
+    <dl class="rows">
+      <dt>Что делает фронтенд</dt>
+      <dd>
+        <ul class="flow">
+          <li>Забывает старый токен <span class="arrow">→</span> запрашивает новый (шаг 2) <span class="arrow">→</span> повторяет тот же запрос с новым токеном.</li>
+        </ul>
+        <p>Файл при этом не начинается заново: продолжение идёт с того же смещения.</p>
+      </dd>
+      <dt class="backend">Бэкенду</dt>
+      <dd class="backend"><p>На просроченный или чужой токен отвечать именно <strong>401</strong>. На 403 фронтенд не станет обновлять токен и покажет пользователю ошибку пакета.</p></dd>
+    </dl>
+  </article>
+
+  <article class="step api" id="step-7">
+    <div class="step-head">
+      <span class="num">7</span><h3>Сообщить, что пакет загружен</h3><span class="tag api">API · access-токен</span>
+      <p class="when">Все файлы пакета загружены целиком.</p>
+    </div>
+    <dl class="rows">
+      <dt>Запрос</dt>
+      <dd>
+<pre class="http"><span class="m api">POST</span> /api/batches/7f3c9a2e/complete
+<span class="h">Authorization:</span> Bearer &lt;access-токен пользователя&gt;</pre>
+        <p>Тела нет.</p>
+      </dd>
+      <dt>Ответ</dt>
+      <dd>
+<pre class="http"><span class="st api">202 Accepted</span></pre>
+        <p>Подойдёт любой 2xx, тело фронтенд не читает.</p>
+      </dd>
+      <dt>Что делает фронтенд</dt>
+      <dd><p>Убирает пакет из списка загрузок, забывает его upload-токен и запускает следующий пакет из очереди.</p></dd>
+      <dt>Если ошибка</dt>
+      <dd><p>Сеть, 5xx, 408, 429 — повтор каждые 10 секунд, без ограничения. Другие 4xx — пакет показывается с ошибкой и кнопками «Повторить» и «Отменить».</p></dd>
+      <dt class="backend">Бэкенду</dt>
+      <dd class="backend">
+        <ul>
+          <li><strong>Повторный вызов безопасен:</strong> если ответ потерялся, фронтенд пришлёт запрос ещё раз. Уже завершённый пакет — снова 2xx, а не ошибка.</li>
+          <li>Если загружены не все файлы — 400 или 422. Не 409: 409 и 423 фронтенд считает временными и будет повторять бесконечно.</li>
+        </ul>
+      </dd>
+    </dl>
+  </article>
+
+  <article class="step api" id="step-8">
+    <div class="step-head">
+      <span class="num">8</span><h3>Отмена пакета</h3><span class="tag tus">Tus</span><span class="tag api">API</span>
+      <p class="when">Пользователь нажал «Отменить» и подтвердил. Можно в любой момент: в очереди, во время загрузки, при ошибке.</p>
+    </div>
+    <dl class="rows">
+      <dt>Запросы</dt>
+      <dd>
+<pre class="http"><span class="c">для каждого файла, загрузка которого начата, но не закончена (upload-токен):</span>
+<span class="m tus">DELETE</span> /api/uploads/3b1e40c7
+<span class="h">Authorization:</span> Bearer &lt;upload-токен&gt;
+<span class="h">Tus-Resumable:</span> 1.0.0
+
+<span class="c">для пакета целиком (access-токен):</span>
+<span class="m api">DELETE</span> /api/batches/7f3c9a2e
+<span class="h">Authorization:</span> Bearer &lt;access-токен пользователя&gt;</pre>
+        <p>Запросы уходят почти одновременно. Ожидаемый ответ на оба — <code>204 No Content</code>.</p>
+      </dd>
+      <dt>Что делает фронтенд</dt>
+      <dd><p>Сразу убирает пакет из списка, не дожидаясь ответов, и запускает следующий из очереди. Если запрос не прошёл, фронтенд его не повторяет.</p></dd>
+      <dt class="backend">Бэкенду</dt>
+      <dd class="backend"><p><code>DELETE /api/batches/{batchId}</code> сам удаляет все файлы пакета, и загруженные, и недогруженные, и отзывает upload-токен. На Tus-DELETE полагаться нельзя: он может не дойти или прийти уже после отзыва токена. Брошенные пакеты удаляются по сроку хранения.</p></dd>
+    </dl>
+  </article>
+
+  <div class="callout">
+    <p><strong>Закрытие вкладки</strong> — запросов нет. Загрузка останавливается, уже загруженное остаётся на сервере до истечения срока хранения. Продолжение после повторного открытия будет позже, для него понадобится <code>GET /api/batches</code>.</p>
+  </div>
+</section>
+
+<section id="storage">
+  <h2>Где фронтенд держит данные из ответов</h2>
+  <p>Всё хранится только в памяти вкладки. В <code>localStorage</code> ничего не пишем: ни токены, ни адреса.</p>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Значение</th><th>Откуда</th><th>Где лежит</th><th>Для чего</th></tr></thead>
+      <tbody>
+        <tr><td><code>batchId</code></td><td>Ответ шага 1</td><td>Очередь в <code>UploadManager</code>, метаданные Uppy</td><td>Адреса шагов 2, 7, 8; <code>Upload-Metadata</code></td></tr>
+        <tr><td><code>fileIndex</code></td><td>Порядок в <code>files</code> шага 1</td><td>Метаданные файла в Uppy</td><td><code>Upload-Metadata</code></td></tr>
+        <tr><td>upload-токен</td><td>Ответ шага 2</td><td>Память <code>UploadManager</code></td><td><code>Authorization</code> в Tus-запросах</td></tr>
+        <tr><td>Адрес загрузки</td><td><code>Location</code> шага 3</td><td>Состояние файла в Uppy</td><td>PATCH, HEAD, DELETE</td></tr>
+        <tr><td>Смещение</td><td><code>Upload-Offset</code> шагов 4–5</td><td>Нигде: каждый раз спрашиваем у сервера</td><td>С какого байта продолжать</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="codes">
+  <h2>Коды ответов: что делает фронтенд</h2>
+  <p>Исключение — шаг 1: там любая ошибка просто показывается в форме.</p>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Ответ</th><th>Что делает фронтенд</th><th>Итог для пользователя</th></tr></thead>
+      <tbody>
+        <tr><td>2xx</td><td>Идёт дальше</td><td class="ok">Загрузка идёт</td></tr>
+        <tr><td>Нет ответа (сеть), 408, 429, 5xx</td><td>Tus-запросы: Tus-клиент повторяет сам (около 9 секунд), потом пауза 10 секунд и всё сначала. Запросы API: повтор каждые 10 секунд. Без ограничения числа попыток</td><td class="retry">«Нет связи с сервером. Повторим автоматически»</td></tr>
+        <tr><td>409, 423</td><td>Повтор, как при сбое связи</td><td class="retry">То же</td></tr>
+        <tr><td>401 от Tus</td><td>Новый upload-токен и повтор запроса (шаг 6)</td><td class="ok">Незаметно</td></tr>
+        <tr><td>401 от API</td><td>Обновляет access-токен HTTP-клиент приложения, как обычно</td><td class="ok">Незаметно</td></tr>
+        <tr><td>404, 410 на HEAD</td><td>Создаёт загрузку заново, файл идёт с нуля</td><td class="retry">Загрузка идёт, но дольше</td></tr>
+        <tr><td>Остальные 4xx (400, 403, 404, 413, 422)</td><td>Не повторяет. Пакет в ошибке, очередь идёт дальше</td><td class="fail">«Ошибка загрузки» и кнопки «Повторить», «Отменить»</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-top:12px">Текст ошибки из ответа фронтенд пока не показывает: пользователь видит общее сообщение.</p>
+</section>
+
+<section id="backend">
+  <h2>Что нужно от бэкенда</h2>
+  <ul class="checklist">
+    <li>Четыре запроса API: <code>POST /api/batches</code>, <code>POST /api/batches/{batchId}/upload-token</code>, <code>POST /api/batches/{batchId}/complete</code>, <code>DELETE /api/batches/{batchId}</code>.</li>
+    <li>Tus-сервер по протоколу Tus 1.0 с расширениями <code>creation</code> и <code>termination</code>, на том же домене через nginx (443).</li>
+    <li>nginx для Tus-адреса: <code>proxy_request_buffering off</code>, <code>client_max_body_size 0</code>, длинные таймауты.</li>
+    <li>Правильный внешний <code>Location</code> в ответе на создание загрузки.</li>
+    <li>Проверка Tus-запросов по токену и манифесту пакета: <code>batchId</code>, <code>fileIndex</code>, <code>Upload-Length</code>.</li>
+    <li>401 — на просроченный upload-токен; 404 или 410 на HEAD — только если загрузки действительно нет.</li>
+    <li>Повторный <code>complete</code> безопасен; для постоянных ошибок — 4xx, но не 409 и не 423.</li>
+    <li>Отмена пакета удаляет все его файлы на сервере сама; брошенные пакеты удаляются по сроку хранения.</li>
+    <li>Лимиты: 25 ГиБ на файл, 100 ГиБ на пакет, ГиБ = 1024³ байт.</li>
+  </ul>
+
+  <h2>Открытые вопросы к бэкенду</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Вопрос</th><th>Пока считаем так</th></tr></thead>
+      <tbody>
+        <tr><td>Точный путь Tus-адреса</td><td><code>/api/uploads/</code></td></tr>
+        <tr><td>Подтверждаете отдельный upload-токен на пакет и его параметры (срок жизни, права)?</td><td>Да, как в шаге 2</td></tr>
+        <tr><td>Имена полей, коды ответов, формат <code>batchId</code></td><td>Как в этом документе; если у вас иначе, фронтенд подстроится</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p style="margin-top:14px">Пока не используется (появится после минимальной версии): <code>GET /api/batches/{batchId}</code> — статус обработки пакета; <code>GET /api/batches</code> — незавершённые пакеты пользователя.</p>
+</section>
+
+<footer>
+  Источник: спецификация фронтенда загрузки, раздел «Контракт с бэкендом». Поведение Uppy 6 и tus-js-client 4.3.1 сверено с их исходным кодом.
+</footer>
+
+</div>
